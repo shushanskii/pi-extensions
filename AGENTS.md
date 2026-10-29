@@ -96,8 +96,22 @@ scripts say what runs; this says what they do not:
 - `fallow report` prints duplication and complexity as advice, never as a failure; both are
   the shape of this repository, not defects in it.
 
-There are no tests and no linter beyond Biome. A change to a package is verified by loading
-it:
+There is no linter beyond Biome. Tests run on Vitest and live beside the package they test,
+in `packages/<name>/test/`, which `files` leaves out of the published tarball. What two
+packages' tests share lives in `tests/` at the root: a throwaway HOME, a local server that
+plays both the model (scripted turns, not a model) and the endpoints an extension calls, pi
+in RPC mode, and pi's real TUI in a pseudo-terminal.
+
+`*.test.ts` drives pi over RPC: commands, tool calls, the `notify`/`setWidget`/`select`
+requests an extension makes. `*.tui.ts` drives the interactive TUI through
+`@microsoft/tui-test` and is kept for what only a terminal shows — where a widget lands, a
+hint below the editor, a dialog. Those run with `npm run test:tui`, outside `check` and CI
+until a run on the runner proves the native terminal engine works on its CPU. A test drives the pinned pi from `node_modules`, never the `pi` on PATH, with HOME and
+`PI_CODING_AGENT_DIR` pointed at a temporary directory: the real `~/.pi` is neither read nor
+written. Set that HOME in the child's `env`, never by assignment in a shell script, where it
+leaks into every later line.
+
+A change to a package is still also verified by loading it:
 
 ```bash
 pi --no-extensions -e ./packages/<name>
@@ -105,15 +119,23 @@ pi --no-extensions -e ./packages/<name>
 
 ## A package imports nothing from another package
 
-Every `packages/<name>` is one fallow zone in `.fallowrc.json` and every zone allows nothing,
+Every `packages/<name>/index.ts` is one fallow zone in `.fallowrc.json` and every such zone
+allows nothing,
 which is what turns "independent packages" from an intention into a check: importing
 `../pi-speak/index.ts` or `@shushanskii/pi-speak` from another package fails `npm run analyze`,
 and the file and the zone it crossed are named. Code that two packages both need becomes a
 package of its own, published the same way — not an import.
 
+Tests are zones of their own. `tests/` allows nothing; `packages/<name>/test/` is the zone
+`pkg-<name>-test`, which may import `tests` and its own package and nothing else. The split is
+the point: were the package zone allowed to import `tests`, `index.ts` could too, the gate
+would pass, and the published package would fail to load, because `tests/` is not in it.
+The package zone names `index.ts` rather than the whole directory for the same reason.
+
 `coverage.requireAllFiles` is on, so a source file matching no zone fails too. A new
-directory at the root needs a zone added, and an eighth package needs its zone and its rule:
-forgetting is caught by the gate, not by review.
+directory at the root needs a zone added, an eighth package needs its zone and its rule, and
+the first test of a package needs its `-test` zone and rule: forgetting is caught by the
+gate, not by review.
 
 `fallow report` is not part of `check` on purpose. The duplication it finds is the
 registration boilerplate repeated per extension, and the complexity is one long function per

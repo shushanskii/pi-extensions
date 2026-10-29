@@ -1,8 +1,8 @@
 # Every push to `main` and every pull request is checked the way `npm run check` checks it:
 # types, then Biome (format, lint, import order), then fallow (package boundaries, then dead
-# code). One step per tool, so a failed run names the tool instead of ending in "check
-# failed"; the steps call the same npm scripts the local gate calls, so the two cannot drift
-# apart.
+# code), then the tests. One step per tool, so a failed run names the tool instead of ending
+# in "check failed"; the steps call the same npm scripts the local gate calls, so the two
+# cannot drift apart.
 #
 # `report` is advisory and cannot fail: it prints duplication and complexity, which this
 # repository currently keeps on purpose (one file per extension repeats its registration
@@ -89,6 +89,9 @@ jobs:
       - name: boundaries and dead code
         env: { RUST_BACKTRACE: "1" }
         run: npm run analyze
+      # pi in RPC mode against a throwaway HOME: no network beyond 127.0.0.1, no ~/.pi.
+      - name: tests
+        run: npm test
       - name: duplication and complexity (advisory)
         run: npm run report
 

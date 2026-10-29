@@ -5,8 +5,9 @@
 		"moduleResolution": "nodenext",
 		"strict": true,
 		"noEmit": true,
+		"allowImportingTsExtensions": true,
 		"skipLibCheck": true,
 		"types": ["node"]
 	},
-	"include": ["packages/*/index.ts"]
+	"include": ["packages/*/index.ts", "packages/*/test/**/*.ts", "tests/**/*.ts"]
 }

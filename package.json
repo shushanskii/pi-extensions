@@ -3,7 +3,9 @@
 	"private": true,
 	"description": "The lab's pi extensions, one npm package each, published to GitHub Packages",
 	"scripts": {
-		"check": "npm run typecheck && npm run lint && npm run analyze",
+		"check": "npm run typecheck && npm run lint && npm run analyze && npm test",
+		"test": "vitest run --project rpc",
+		"test:tui": "vitest run --project tui",
 		"typecheck": "tsc -p .",
 		"lint": "biome check --error-on-warnings --max-diagnostics=none .",
 		"fix": "biome check --write .",
@@ -14,9 +16,11 @@
 		"@biomejs/biome": "^2.6.4",
 		"@earendil-works/pi-coding-agent": "1.4.0",
 		"@earendil-works/pi-tui": "1.4.0",
+		"@microsoft/tui-test": "^0.1.1",
 		"@types/node": "^22",
 		"fallow": "^3.37.0",
 		"typebox": "1.4.3",
-		"typescript": "^5"
+		"typescript": "^5",
+		"vitest": "^5.0.5"
 	}
 }
