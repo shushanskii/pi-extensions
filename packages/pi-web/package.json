@@ -1,0 +1,27 @@
+{
+  "name": "@developer/pi-web",
+  "version": "1.0.0",
+  "description": "the lab's Crawl4AI as the tools the model reaches for without thinking",
+  "keywords": [
+    "pi-package"
+  ],
+  "license": "UNLICENSED",
+  "files": [
+    "index.ts",
+    "README.md",
+    "web.json.example"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "publishConfig": {
+    "registry": "https://git.rezolver-zero.com/api/packages/developer/npm/"
+  }
+}

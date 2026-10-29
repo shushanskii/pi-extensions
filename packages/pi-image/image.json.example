@@ -1,0 +1,10 @@
+{
+  "baseUrl": "https://llm.rezolver-zero.com/v1",
+  "model": "qwen-image",
+  "size": "1024x1024",
+  "format": "png",
+  "cfgScale": 6.0,
+  "dir": "~/Pictures/pi",
+  "timeoutMs": 900000,
+  "open": false
+}

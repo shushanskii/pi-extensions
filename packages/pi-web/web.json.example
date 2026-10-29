@@ -1,0 +1,5 @@
+{
+  "endpoint": "https://fetch.rezolver-zero.com",
+  "tokenFile": "~/.pi/agent/mcp/c4a.token",
+  "dir": "~/Downloads/pi-web"
+}

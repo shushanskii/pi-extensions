@@ -1,0 +1,15 @@
+{
+  "name": "pi-extensions",
+  "private": true,
+  "description": "The lab's pi extensions, one npm package each in the forge's registry",
+  "scripts": {
+    "check": "tsc -p ."
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
+    "@types/node": "^22",
+    "typebox": "1.4.3",
+    "typescript": "^5"
+  }
+}

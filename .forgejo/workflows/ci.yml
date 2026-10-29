@@ -1,0 +1,45 @@
+# Every push is type-checked against the pi release the packages are written for.
+# A tag NAME@VERSION (pi-web@1.2.0) publishes packages/NAME to the forge's npm
+# registry — once, after the check, and only when VERSION is what that package.json
+# says, so a tag cannot publish a version the manifest does not carry.
+#
+# The token is REGISTRY_TOKEN, the same write:package token srv02/k3s's image
+# workflow pushes with (gw-router: srv02/k3s/README.md): a task token is refused by
+# the registry, and the refusal names nothing.
+name: ci
+on:
+  push:
+    branches: [main]
+    tags: ["*@*"]
+
+jobs:
+  check:
+    runs-on: docker
+    container: { image: node:22-alpine }
+    steps:
+      - uses: https://github.com/actions/checkout@v4
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
+
+  publish:
+    needs: check
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: docker
+    container: { image: node:22-alpine }
+    steps:
+      - uses: https://github.com/actions/checkout@v4
+      - name: publish the package the tag names
+        env:
+          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          name="${TAG%@*}"; version="${TAG##*@}"
+          dir="packages/$name"
+          [ -f "$dir/package.json" ] || { echo "tag $TAG names no package: $dir/package.json is missing"; exit 1; }
+          declared=$(node -p "require('./$dir/package.json').version")
+          [ "$declared" = "$version" ] || { echo "tag says $version, $dir/package.json says $declared"; exit 1; }
+          [ -n "$REGISTRY_TOKEN" ] || { echo "secret REGISTRY_TOKEN is not set for this repository or its owner"; exit 1; }
+          reg=git.rezolver-zero.com/api/packages/developer/npm/
+          printf '@developer:registry=https://%s\n//%s:_authToken=%s\n' "$reg" "$reg" "$REGISTRY_TOKEN" > "$HOME/.npmrc"
+          npm publish "./$dir"

@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "answerChars": 4000,
+  "userChars": 1500,
+  "maxTokens": 80
+}
