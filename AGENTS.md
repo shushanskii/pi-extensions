@@ -1,11 +1,11 @@
 # AGENTS.md
 
-Seven pi extensions, one npm package each, published to the forge's npm registry.
+Repo for pi extensions: one npm package each, published to the forge's npm registry.
 [`README.md`](./README.md) is the map; the header comment of each `packages/<name>/index.ts`
 carries its design, its measurements and its failure modes, and is the thing to read
 before touching that package.
 
-## Three rules
+## Rules
 
 1. **A branch and a worktree per change.** No feature and no bugfix is worked on in the
    `main` checkout. Branch `feat/<thing>` or `fix/<thing>`, worktree beside the repository:
@@ -29,6 +29,35 @@ before touching that package.
    branch names, tool descriptions, README and error strings — English. This is the
    operator's second language and the only language a published package's description is
    read in. Russian belongs to the chat and to session notes, never to a file here.
+
+4. **`main` is protected — only a merged pull request changes it.** Direct pushes are refused
+   by the server, not by convention — measured with the account this machine pushes with:
+   pushing to `main` ends in
+   `Forgejo: Not allowed to push to protected branch main` and `pre-receive hook declined`.
+   Work happens on the branch and arrives by pull request; merging is an action of its own,
+   so it needs its own approval under rule 2.
+
+   **Opening a pull request is the user's click; the agent's part ends with a link and a
+   description.** After the push, hand over the compare URL the push itself prints, plus the
+   text to paste — the title is one line about what changes, the body is the reason, which is
+   already written in the commit message:
+
+   ```text
+   https://git.rezolver-zero.com/developer/pi-extensions/compare/main...<branch>
+   ```
+
+   Do not spend a push rediscovering the two ways that do not work here. Forgejo 14.0.5
+   ignores `merge_request.create` — bare and `=true` alike, a push of a new branch answers
+   with nothing but that compare URL — and the tokens held here are scoped to packages, so
+   the API refuses even a read:
+
+   ```text
+   token does not have at least one of required scope(s): [read:repository]
+   ```
+
+   `POST /repos/developer/pi-extensions/pulls` does work, given a token scoped for the
+   repository (*Settings → Applications*, not the one `~/.npmrc` uses for packages); ask for
+   one rather than assuming it is there.
 
 ## Before proposing a change
 
