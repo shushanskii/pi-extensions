@@ -45,8 +45,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
-import { Text } from "@earendil-works/pi-tui";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "web.json");
@@ -134,10 +134,20 @@ class HttpError extends Error {
 // The fetcher's SSRF guard says "URL blocked" for a name that does not resolve as
 // well as for a private address, so the row says both.
 function explain(message: string): string {
-	return /URL blocked/i.test(message) ? "blocked by the fetcher: the name does not resolve, or it points at a private address" : message;
+	return /URL blocked/i.test(message)
+		? "blocked by the fetcher: the name does not resolve, or it points at a private address"
+		: message;
 }
 
-type Peeked = { url: string; status: number | null; hop: number | null; final: string | null; title: string; description: string; error: string };
+type Peeked = {
+	url: string;
+	status: number | null;
+	hop: number | null;
+	final: string | null;
+	title: string;
+	description: string;
+	error: string;
+};
 
 function clip(s: unknown, n: number): string {
 	const t = typeof s === "string" ? s.replace(/\s+/g, " ").trim() : "";
@@ -172,7 +182,10 @@ async function peek(urls: string[], signal: AbortSignal | undefined): Promise<Pe
 	}
 	return urls.map((u) => {
 		const r = results.find((x) => x?.url === u) ?? {};
-		const final = typeof r.redirected_url === "string" && r.redirected_url.replace(/\/$/, "") !== u.replace(/\/$/, "") ? r.redirected_url : null;
+		const final =
+			typeof r.redirected_url === "string" && r.redirected_url.replace(/\/$/, "") !== u.replace(/\/$/, "")
+				? r.redirected_url
+				: null;
 		const first = typeof r.status_code === "number" ? r.status_code : null;
 		// status_code is the first hop's (307 for http://go.dev); the page the model
 		// would read is the one after the redirect.
@@ -184,7 +197,8 @@ async function peek(urls: string[], signal: AbortSignal | undefined): Promise<Pe
 			final,
 			title: clip(r.metadata?.title, 160),
 			description: clip(r.metadata?.description, 240),
-			error: r.success === false || !results.length ? clip(explain(r.error_message || "no result for this URL"), 240) : "",
+			error:
+				r.success === false || !results.length ? clip(explain(r.error_message || "no result for this URL"), 240) : "",
 		};
 	});
 }
@@ -218,7 +232,12 @@ function cut(md: string, offset: number): string {
 	return md.slice(offset, end);
 }
 
-async function read(url: string, query: string | undefined, raw: boolean, signal: AbortSignal | undefined): Promise<Read> {
+async function read(
+	url: string,
+	query: string | undefined,
+	raw: boolean,
+	signal: AbortSignal | undefined,
+): Promise<Read> {
 	const chain = raw ? ["raw"] : query ? ["bm25", "fit", "raw"] : ["fit", "raw"];
 	for (const f of chain) {
 		const data = await post("/md", query && f === "bm25" ? { url, f, q: query } : { url, f }, signal);
@@ -295,11 +314,18 @@ export default function (pi: ExtensionAPI) {
 					"for raw HTTP work these tools do not cover: custom headers, methods, APIs that answer JSON.",
 			],
 			parameters: Type.Object({
-				urls: Type.Array(Type.String(), { description: `1..${PEEK_MAX} absolute http(s) URLs`, minItems: 1, maxItems: PEEK_MAX }),
+				urls: Type.Array(Type.String(), {
+					description: `1..${PEEK_MAX} absolute http(s) URLs`,
+					minItems: 1,
+					maxItems: PEEK_MAX,
+				}),
 			}),
 			annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
 			async execute(_id, args, signal) {
-				const urls = [...new Set((args as { urls: string[] }).urls.map((u) => u.trim()).filter(Boolean))].slice(0, PEEK_MAX);
+				const urls = [...new Set((args as { urls: string[] }).urls.map((u) => u.trim()).filter(Boolean))].slice(
+					0,
+					PEEK_MAX,
+				);
 				const rows = await peek(urls, signal);
 				const alive = rows.filter((r) => r.status !== null && r.status < 400).length;
 				return {
@@ -311,7 +337,11 @@ export default function (pi: ExtensionAPI) {
 				const n = Array.isArray(args?.urls) ? args.urls.length : 0;
 				const first = n ? String(args.urls[0]) : "";
 				const shown = first.length > 50 ? first.slice(0, 47) + "..." : first;
-				return new Text(theme.fg("toolTitle", "peek ") + theme.fg("accent", shown) + (n > 1 ? theme.fg("muted", ` +${n - 1}`) : ""), 0, 0);
+				return new Text(
+					theme.fg("toolTitle", "peek ") + theme.fg("accent", shown) + (n > 1 ? theme.fg("muted", ` +${n - 1}`) : ""),
+					0,
+					0,
+				);
 			},
 			renderResult(result: any, _opts: any, theme: any) {
 				const d = result.details;
@@ -341,7 +371,9 @@ export default function (pi: ExtensionAPI) {
 				url: Type.String({ description: "Absolute http(s) URL" }),
 				query: Type.Optional(Type.String({ description: "Keep only passages relevant to this query" })),
 				raw: Type.Optional(Type.Boolean({ description: "Whole page converted as-is, no content filter" })),
-				offset: Type.Optional(Type.Number({ description: "Character offset to start from, for paging a long page. Default 0." })),
+				offset: Type.Optional(
+					Type.Number({ description: "Character offset to start from, for paging a long page. Default 0." }),
+				),
 			}),
 			annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true, idempotentHint: true },
 			async execute(_id, args, signal) {
@@ -351,7 +383,12 @@ export default function (pi: ExtensionAPI) {
 				const total = r.markdown.length;
 				if (!total) {
 					return {
-						content: [{ type: "text", text: `Empty page: every filter returned nothing for ${a.url}. Check it with web_peek — a dead link and an unrenderable page look the same here.` }],
+						content: [
+							{
+								type: "text",
+								text: `Empty page: every filter returned nothing for ${a.url}. Check it with web_peek — a dead link and an unrenderable page look the same here.`,
+							},
+						],
 						details: { url: a.url, filter: r.filter, length: 0, offset: 0, shown: 0 },
 					};
 				}
@@ -398,10 +435,14 @@ export default function (pi: ExtensionAPI) {
 					"render. For what a page says, web_read is cheaper and exact.",
 			],
 			parameters: Type.Object({
-				url: Type.String({ description: "Absolute http(s) URL of a page (not an image file: the browser renders pages)" }),
+				url: Type.String({
+					description: "Absolute http(s) URL of a page (not an image file: the browser renders pages)",
+				}),
 				wait: Type.Optional(Type.Number({ description: "Seconds to wait after load before the capture. Default 2." })),
 				images: Type.Optional(Type.Boolean({ description: "Wait for images to finish loading" })),
-				path: Type.Optional(Type.String({ description: "Where to write. Default: the configured directory, named by time and URL." })),
+				path: Type.Optional(
+					Type.String({ description: "Where to write. Default: the configured directory, named by time and URL." }),
+				),
 			}),
 			annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: false },
 			async execute(_id, args, signal, _onUpdate, ctx) {
@@ -426,7 +467,11 @@ export default function (pi: ExtensionAPI) {
 			},
 			renderCall(args: any, theme: any) {
 				const url = String(args?.url ?? "");
-				return new Text(theme.fg("toolTitle", "screenshot ") + theme.fg("accent", url.length > 50 ? url.slice(0, 47) + "..." : url), 0, 0);
+				return new Text(
+					theme.fg("toolTitle", "screenshot ") + theme.fg("accent", url.length > 50 ? url.slice(0, 47) + "..." : url),
+					0,
+					0,
+				);
 			},
 			renderResult(result: any, _opts: any, theme: any) {
 				const d = result.details;
@@ -440,11 +485,14 @@ export default function (pi: ExtensionAPI) {
 		defineTool({
 			name: "web_pdf",
 			label: "Web PDF",
-			description: "Print a web page to a PDF file through the lab's Crawl4AI (a real browser). The result names the file.",
+			description:
+				"Print a web page to a PDF file through the lab's Crawl4AI (a real browser). The result names the file.",
 			promptSnippet: "Save a web page as a PDF file",
 			parameters: Type.Object({
 				url: Type.String({ description: "Absolute http(s) URL of a page" }),
-				path: Type.Optional(Type.String({ description: "Where to write. Default: the configured directory, named by time and URL." })),
+				path: Type.Optional(
+					Type.String({ description: "Where to write. Default: the configured directory, named by time and URL." }),
+				),
 			}),
 			annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true, idempotentHint: false },
 			async execute(_id, args, signal) {
@@ -457,7 +505,11 @@ export default function (pi: ExtensionAPI) {
 			},
 			renderCall(args: any, theme: any) {
 				const url = String(args?.url ?? "");
-				return new Text(theme.fg("toolTitle", "pdf ") + theme.fg("accent", url.length > 50 ? url.slice(0, 47) + "..." : url), 0, 0);
+				return new Text(
+					theme.fg("toolTitle", "pdf ") + theme.fg("accent", url.length > 50 ? url.slice(0, 47) + "..." : url),
+					0,
+					0,
+				);
 			},
 			renderResult(result: any, _opts: any, theme: any) {
 				const d = result.details;
@@ -487,10 +539,15 @@ export default function (pi: ExtensionAPI) {
 			}
 			const lines = [
 				missing.length ? `inactive: ${missing.join(", ")}` : `active: ${ours.join(", ")}`,
-				leftover.length ? `still offered (should not be): ${leftover.join(", ")}` : "no fetch_* / mcp__fetch tools offered",
+				leftover.length
+					? `still offered (should not be): ${leftover.join(", ")}`
+					: "no fetch_* / mcp__fetch tools offered",
 				`endpoint ${cfg.endpoint} · token ${tok} · dir ${expand(cfg.dir)}`,
 			];
-			(ctx as unknown as ExtensionContext).ui.notify(lines.join("\n"), missing.length || leftover.length || tok !== "ok" ? "warning" : "info");
+			(ctx as unknown as ExtensionContext).ui.notify(
+				lines.join("\n"),
+				missing.length || leftover.length || tok !== "ok" ? "warning" : "info",
+			);
 		},
 	});
 

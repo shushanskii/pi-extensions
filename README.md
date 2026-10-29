@@ -9,15 +9,15 @@ pi remove  npm:@developer/pi-web
 pi update  --extensions          # moves every unpinned package to its latest version
 ```
 
-| Package | What it does | Config | Scope |
-|---|---|---|---|
-| [`pi-web`](packages/pi-web) | Crawl4AI as `web_peek`, `web_read`, `web_screenshot`, `web_pdf`; `/web` shows what the model is offered | `web.json` | global |
-| [`pi-image`](packages/pi-image) | qwen-image as `generate_image`; `/image test` | `image.json` | global |
-| [`pi-speak`](packages/pi-speak) | one spoken Russian sentence at the end of a turn, through piper; `/speak` | `tts.json` | global |
-| [`next-prompt`](packages/next-prompt) | the next message guessed as grey ghost text; `/suggest` | `next-prompt.json` | global |
-| [`rewrite-compact`](packages/rewrite-compact) | a compaction summary rewritten, not appended to | — | global |
-| [`remote-gate`](packages/remote-gate) | a yes/no before a bash call changes a remote host or the network | — | global, **not installed** |
-| [`read-window`](packages/read-window) | refuses an unbounded `read` of a large file | — | project: `gw-router` |
+| Package                                       | What it does                                                                                            | Config             | Scope                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------- |
+| [`pi-web`](packages/pi-web)                   | Crawl4AI as `web_peek`, `web_read`, `web_screenshot`, `web_pdf`; `/web` shows what the model is offered | `web.json`         | global                    |
+| [`pi-image`](packages/pi-image)               | qwen-image as `generate_image`; `/image test`                                                           | `image.json`       | global                    |
+| [`pi-speak`](packages/pi-speak)               | one spoken Russian sentence at the end of a turn, through piper; `/speak`                               | `tts.json`         | global                    |
+| [`next-prompt`](packages/next-prompt)         | the next message guessed as grey ghost text; `/suggest`                                                 | `next-prompt.json` | global                    |
+| [`rewrite-compact`](packages/rewrite-compact) | a compaction summary rewritten, not appended to                                                         | —                  | global                    |
+| [`remote-gate`](packages/remote-gate)         | a yes/no before a bash call changes a remote host or the network                                        | —                  | global, **not installed** |
+| [`read-window`](packages/read-window)         | refuses an unbounded `read` of a large file                                                             | —                  | project: `gw-router`      |
 
 Configs live in `~/.pi/agent/`, every key is optional, and each package carries a
 `*.example` of its shape. Secrets stay in the config or in a file it names, never in
@@ -26,7 +26,7 @@ this repository.
 ## Setting up a machine
 
 npm needs to know where the `@developer` scope lives, and — unless the `developer`
-account is public — a token that may read its packages: *Settings → Applications*,
+account is public — a token that may read its packages: _Settings → Applications_,
 scope `read:package`. pi installs with npm, and npm reads `~/.npmrc`:
 
 ```ini

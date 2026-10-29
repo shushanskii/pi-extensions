@@ -56,7 +56,7 @@ before touching that package.
    ```
 
    `POST /repos/developer/pi-extensions/pulls` does work, given a token scoped for the
-   repository (*Settings → Applications*, not the one `~/.npmrc` uses for packages); ask for
+   repository (_Settings → Applications_, not the one `~/.npmrc` uses for packages); ask for
    one rather than assuming it is there.
 
 ## Before proposing a change
