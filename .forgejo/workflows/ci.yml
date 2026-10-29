@@ -8,8 +8,16 @@
 # repository currently keeps on purpose (one file per extension repeats its registration
 # boilerplate). Make a step of them fail only after that code is restructured.
 #
-# Both tools are native binaries picked per platform, and both ship a musl build
-# (@biomejs/cli-linux-x64-musl, @fallow-cli/linux-x64-musl), so node:22-alpine runs them.
+# Both tools are native binaries picked per platform. Biome's musl build works in an alpine
+# container — the lint step passed there. fallow's does not: it died a second into the analysis
+# with `fallow binary terminated by signal SIGILL` (exit 132), while the same version works on
+# macOS. Why is still open. SIGILL is also how a Rust `abort()` looks, since `abort()` compiles
+# to `ud2`, and the runner asks for `platform=linux/amd64`, so on a non-amd64 host the code runs
+# emulated — and an emulator without AVX2 turns such an instruction into SIGILL. Neither binary
+# uses AVX-512; both use AVX2 (fallow's musl build has 9 733 ymm instructions, Biome's 5 372),
+# so Biome passing only says its AVX2 paths were never executed there.
+# Hence a Debian base, where fallow picks @fallow-cli/linux-x64-gnu, and one step naming the
+# machine's own CPU flags, so that whichever way the next run goes it can be read.
 #
 # A tag NAME@VERSION (pi-web@1.2.0) publishes packages/NAME to the forge's npm
 # registry — once, after the check, and only when VERSION is what that package.json
@@ -25,22 +33,36 @@ on:
     tags: ["*@*"]
   # A gate that first runs after the merge is a gate that reports problems into main.
   # main is protected and only changes through a pull request, so this trigger is what lets
-  # the check be proved before it lands — including that the two native binaries resolve
-  # their musl builds in the alpine container, which no local run can show.
+  # the check be proved before it lands — which is how the fallow-in-alpine failure below was
+  # caught at all.
   pull_request:
 
 jobs:
   check:
     runs-on: docker
-    container: { image: node:22-alpine }
+    container: { image: node:22 }
     steps:
       - uses: https://github.com/actions/checkout@v4
       - run: npm ci --no-audit --no-fund
+      # Reports, never fails: every line ends in `|| true`. A native binary dying by signal is
+      # only diagnosable with these facts, and `--version` here separates "crashes on startup"
+      # from "crashes once it starts reading the repository".
+      - name: what this container is
+        run: |
+          uname -a || true
+          grep -m1 PRETTY_NAME /etc/os-release || true
+          node -v; npm -v
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -E '^(avx|avx2|avx512[a-z0-9]*|sse4_2|bmi[0-9])$' | tr '\n' ' ' || true
+          echo
+          npx fallow --version || true
       - name: types
         run: npm run typecheck
       - name: format and lint
         run: npm run lint
+      # RUST_BACKTRACE because a Rust abort() loses fallow's buffered stdout — the backtrace
+      # goes to stderr, which is unbuffered, so it is the only trace that survives.
       - name: boundaries and dead code
+        env: { RUST_BACKTRACE: "1" }
         run: npm run analyze
       - name: duplication and complexity (advisory)
         run: npm run report
@@ -49,6 +71,7 @@ jobs:
     needs: check
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: docker
+    # Alpine here is fine: this job only runs npm publish, and no native binary is involved.
     container: { image: node:22-alpine }
     steps:
       - uses: https://github.com/actions/checkout@v4
