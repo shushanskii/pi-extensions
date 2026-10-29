@@ -1,7 +1,8 @@
-# Every push is checked the way `npm run check` checks it: types, then Biome (format,
-# lint, import order), then fallow (package boundaries, then dead code). One step per
-# tool, so a failed run names the tool instead of ending in "check failed"; the steps call
-# the same npm scripts the local gate calls, so the two cannot drift apart.
+# Every push to `main` and every pull request is checked the way `npm run check` checks it:
+# types, then Biome (format, lint, import order), then fallow (package boundaries, then dead
+# code). One step per tool, so a failed run names the tool instead of ending in "check
+# failed"; the steps call the same npm scripts the local gate calls, so the two cannot drift
+# apart.
 #
 # `report` is advisory and cannot fail: it prints duplication and complexity, which this
 # repository currently keeps on purpose (one file per extension repeats its registration
@@ -22,6 +23,11 @@ on:
   push:
     branches: [main]
     tags: ["*@*"]
+  # A gate that first runs after the merge is a gate that reports problems into main.
+  # main is protected and only changes through a pull request, so this trigger is what lets
+  # the check be proved before it lands — including that the two native binaries resolve
+  # their musl builds in the alpine container, which no local run can show.
+  pull_request:
 
 jobs:
   check:
