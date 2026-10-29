@@ -49,6 +49,7 @@ import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-
 import { Type } from "typebox";
 
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "image.json");
+const WIDGET = "pi-image";
 
 type Config = {
 	/** Root of the OpenAI-compatible API, /v1 included; the SDAPI route hangs off the origin. */
@@ -352,17 +353,42 @@ export default function (pi: ExtensionAPI) {
 					]
 				: [{ prompt }];
 
-			for (const call of calls) {
+			// A widget above the editor, not a notify: a notify is gone in seconds, and the
+			// two generations take 20 s warm and more after a weight load, during which a
+			// silent command reads as a hung one. The lines stay until the next turn starts.
+			const lines: string[] = [];
+			const show = (live?: string) => ui.setWidget(WIDGET, live ? [...lines, live] : [...lines]);
+			const started = Date.now();
+			let failed = false;
+			for (const [i, call] of calls.entries()) {
+				const knobs = call.steps !== undefined || call.seed !== undefined || !!call.negativePrompt;
+				const label = `${calls.length > 1 ? `${i + 1}/${calls.length} ` : ""}${knobs ? "sdapi/txt2img" : "images/generations"}`;
+				const t0 = Date.now();
+				const tick = () => show(`image: ${label} … ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+				tick();
+				const timer = setInterval(tick, 1000);
 				// Nothing aborts a command handler's call — there is no tool call to cancel.
 				try {
 					const out = await generate(cfg, call, new AbortController().signal);
-					const secs = (out.ms / 1000).toFixed(0);
-					ui.notify(`image: ${out.images[0]!.path} in ${secs}s via ${out.route} — ${out.echo}`, "info");
+					lines.push(`image: ✓ ${label} ${(out.ms / 1000).toFixed(0)}s — ${out.images[0]!.path} (${out.echo})`);
 				} catch (err) {
-					ui.notify(`image: ${(err as Error).message}`, "error");
-					return;
+					lines.push(`image: ✗ ${label} — ${(err as Error).message}`);
+					failed = true;
+				} finally {
+					clearInterval(timer);
 				}
+				show();
+				if (failed) break;
 			}
+			const total = ((Date.now() - started) / 1000).toFixed(0);
+			ui.notify(
+				failed ? `image: failed after ${total}s — see the lines above the editor` : `image: done in ${total}s`,
+				failed ? "error" : "info",
+			);
 		},
+	});
+
+	pi.on("before_agent_start", (_event, ctx) => {
+		(ctx as unknown as ExtensionContext).ui.setWidget(WIDGET, undefined);
 	});
 }
