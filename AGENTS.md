@@ -100,16 +100,26 @@ There is no linter beyond Biome. Tests run on Vitest and live beside the package
 in `packages/<name>/test/`, which `files` leaves out of the published tarball. What two
 packages' tests share lives in `tests/` at the root: a throwaway HOME, a local server that
 plays both the model (scripted turns, not a model) and the endpoints an extension calls, pi
-in RPC mode, and pi's real TUI in a pseudo-terminal.
+in RPC mode, pi in JSON mode for one prompt with no client, and pi's real TUI in a
+pseudo-terminal.
 
 `*.test.ts` drives pi over RPC: commands, tool calls, the `notify`/`setWidget`/`select`
-requests an extension makes. `*.tui.ts` drives the interactive TUI through
+requests an extension makes, and the answers to the dialogs among them — `RpcClient` receives
+a dialog as an event and implements no way to answer one, so `tests/rpc.ts` writes the
+response line itself. The one thing RPC cannot show is the branch that runs when there is no
+client to ask, because RPC always has one; a test for that drives `pi --mode json` instead,
+through `tests/print.ts`. Both live in the `rpc` project, which is really "everything that
+needs no screen". `*.tui.ts` drives the interactive TUI through
 `@microsoft/tui-test` and is kept for what only a terminal shows — where a widget lands, a
 hint below the editor, a dialog. Those run with `npm run test:tui`, outside `check` and CI
 until a run on the runner proves the native terminal engine works on its CPU. A test drives the pinned pi from `node_modules`, never the `pi` on PATH, with HOME and
 `PI_CODING_AGENT_DIR` pointed at a temporary directory: the real `~/.pi` is neither read nor
 written. Set that HOME in the child's `env`, never by assignment in a shell script, where it
 leaks into every later line.
+
+A gap the tests find in a package stays in the tests rather than in an issue: `test.fails` keeps it
+executable, and turns red the moment the gap is closed, which is the reminder to drop the marker in
+that same commit.
 
 A change to a package is still also verified by loading it:
 

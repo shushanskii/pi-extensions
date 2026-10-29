@@ -14,8 +14,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-/** One scripted model answer: text, or a tool call pi will then execute. */
-export type Turn = { text: string } | { tool: string; args: Record<string, unknown> };
+/** One scripted model answer: text, a tool call pi will then execute, or several calls at once. */
+export type ToolCall = { tool: string; args: Record<string, unknown> };
+export type Turn = { text: string } | ToolCall | { tools: ToolCall[] };
 
 /** A canned non-chat response, keyed by path; `delayMs` holds it back, the way a GPU would. */
 type Route = { status: number; body: unknown; delayMs?: number };
@@ -98,7 +99,7 @@ export async function startFakeServer(): Promise<FakeServer> {
 		if (path === "/v1/chat/completions") {
 			const turn = turns.shift();
 			if (!turn) return json(res, 500, { error: { message: "fake model: the script has no turn left" } });
-			return streamTurn(res, turn, `call_${++calls}`);
+			return streamTurn(res, turn, () => `call_${++calls}`);
 		}
 		const route = routes.get(path);
 		if (route) {
@@ -148,8 +149,12 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 	res.end(JSON.stringify(body));
 }
 
-/** A turn as the OpenAI streaming format sends it: role, content or one tool call, finish, usage. */
-function streamTurn(res: ServerResponse, turn: Turn, callId: string): void {
+/**
+ * A turn as the OpenAI streaming format sends it: role, content or the tool calls, finish, usage.
+ * Several calls go out one chunk each, carrying the index OpenAI uses to tell them apart, which is
+ * what lets a test put a whole decision table into one turn instead of paying a turn per row.
+ */
+function streamTurn(res: ServerResponse, turn: Turn, nextCallId: () => string): void {
 	res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
 	const chunk = (delta: unknown, finish: string | null = null) =>
 		res.write(
@@ -167,16 +172,19 @@ function streamTurn(res: ServerResponse, turn: Turn, callId: string): void {
 		chunk({ content: turn.text });
 		chunk({}, "stop");
 	} else {
-		chunk({
-			tool_calls: [
-				{
-					index: 0,
-					id: callId,
-					type: "function",
-					function: { name: turn.tool, arguments: JSON.stringify(turn.args) },
-				},
-			],
-		});
+		const calls = "tools" in turn ? turn.tools : [turn];
+		for (const [index, call] of calls.entries()) {
+			chunk({
+				tool_calls: [
+					{
+						index,
+						id: nextCallId(),
+						type: "function",
+						function: { name: call.tool, arguments: JSON.stringify(call.args) },
+					},
+				],
+			});
+		}
 		chunk({}, "tool_calls");
 	}
 	res.write(

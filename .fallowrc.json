@@ -10,6 +10,7 @@
 			{ "name": "pkg-pi-web", "patterns": ["packages/pi-web/index.ts"] },
 			{ "name": "pkg-read-window", "patterns": ["packages/read-window/index.ts"] },
 			{ "name": "pkg-remote-gate", "patterns": ["packages/remote-gate/index.ts"] },
+			{ "name": "pkg-remote-gate-test", "patterns": ["packages/remote-gate/test/**"] },
 			{ "name": "pkg-rewrite-compact", "patterns": ["packages/rewrite-compact/index.ts"] }
 		],
 		"rules": [
@@ -21,6 +22,7 @@
 			{ "from": "pkg-pi-web", "allow": [] },
 			{ "from": "pkg-read-window", "allow": [] },
 			{ "from": "pkg-remote-gate", "allow": [] },
+			{ "from": "pkg-remote-gate-test", "allow": ["tests", "pkg-remote-gate"] },
 			{ "from": "pkg-rewrite-compact", "allow": [] }
 		],
 		"coverage": {
