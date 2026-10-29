@@ -20,48 +20,74 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
+// Every group below is structure, not extraction: these patterns are only ever handed
+// `.test()`, so each group is `(?:…)`. A capturing group that nothing reads is a promise the
+// reader has to disprove before trusting the pattern.
+//
 // Reaches another machine: ssh <host>, or scp/rsync with a host:path operand.
-const REMOTE = [/(^|[\s;&|(])ssh\s/, /(^|[\s;&|(])(scp|rsync)\s[^\n]*\S+:\S*/];
+const REMOTE = [/(?:^|[\s;&|(])ssh\s/u, /(?:^|[\s;&|(])(?:scp|rsync)\s[^\n]*\S+:\S*/u];
 // Copies onto another machine: scp/rsync whose last operand is host:path. Overwriting a
 // remote file is a change whatever it contains; copying from a host to here is not.
-const COPY_OUT = /(^|[\s;&|(])(scp|rsync)\s[^\n;&|]*\s[\w.@-]+:[^\s;&|]*\s*($|[;&|])/;
+const COPY_OUT = /(?:^|[\s;&|(])(?:scp|rsync)\s[^\n;&|]*\s[\w.@-]+:[^\s;&|]*\s*(?:$|[;&|])/u;
 
 // Changes state. Written to catch the verb, not every mention of the tool.
 const CHANGING = [
-	/\bsudo\b/,
-	/\bip\s+(-\S+\s+)*(route|r|addr|address|a|link|l|rule|neigh|n)\s+(add|del|delete|replace|change|flush|set|append)\b/,
-	/\b(nft|iptables|ip6tables|ebtables)\b(?!.*\b(list|-L|-S|--list)\b)/,
-	/\bsystemctl\s+(start|stop|restart|reload|enable|disable|mask|unmask|kill|daemon-reload)\b/,
-	/\b(reboot|shutdown|poweroff|halt)\b/,
-	/\bdocker\s+(rm|rmi|stop|kill|restart|prune|volume\s+rm|network\s+rm|compose\s+(down|rm|stop|restart|up))\b/,
-	/\b(pct|qm)\s+(create|destroy|set|start|stop|reboot|shutdown|resize|migrate|restore)\b/,
-	/\brm\s+(-\w*r\w*f|-\w*f\w*r|--recursive)\b/,
-	/\bsed\s+(-\w+\s+)*-i\b/,
-	/(>|\btee\s+(-a\s+)?)\s*\/etc\//,
-	/\b(apt|apt-get|dnf|yum)\s+(install|remove|purge|upgrade|dist-upgrade|autoremove)\b/,
-	/\b(kill|pkill|killall)\s/,
+	/\bsudo\b/u,
+	/\bip\s+(?:-\S+\s+)*(?:route|r|addr|address|a|link|l|rule|neigh|n)\s+(?:add|del|delete|replace|change|flush|set|append)\b/u,
+	/\b(?:nft|iptables|ip6tables|ebtables)\b(?!.*\b(?:list|-L|-S|--list)\b)/u,
+	/\bsystemctl\s+(?:start|stop|restart|reload|enable|disable|mask|unmask|kill|daemon-reload)\b/u,
+	/\b(?:reboot|shutdown|poweroff|halt)\b/u,
+	/\bdocker\s+(?:rm|rmi|stop|kill|restart|prune|volume\s+rm|network\s+rm|compose\s+(?:down|rm|stop|restart|up))\b/u,
+	/\b(?:pct|qm)\s+(?:create|destroy|set|start|stop|reboot|shutdown|resize|migrate|restore)\b/u,
+	/\brm\s+(?:-\w*r\w*f|-\w*f\w*r|--recursive)\b/u,
+	/\bsed\s+(?:-\w+\s+)*-i\b/u,
+	/(?:>|\btee\s+(?:-a\s+)?)\s*\/etc\//u,
+	/\b(?:apt|apt-get|dnf|yum)\s+(?:install|remove|purge|upgrade|dist-upgrade|autoremove)\b/u,
+	/\b(?:kill|pkill|killall)\s/u,
 	// File changes on the far side: plain on a remote host, so only ever checked with REMOTE.
-	/\btar\s[^|;&]*-\w*x/,
-	/\b(mv|cp|mkdir|rmdir|chmod|chown|ln|truncate|dd|touch)\s/,
+	/\btar\s[^|;&]*-\w*x/u,
+	/\b(?:mv|cp|mkdir|rmdir|chmod|chown|ln|truncate|dd|touch)\s/u,
 ];
 
 // Changing network/service commands that are dangerous on this machine too.
 const LOCAL = [CHANGING[1], CHANGING[2], CHANGING[3], CHANGING[4], CHANGING[6]];
 
+// A command longer than this is truncated in the prompt: the model has the whole string in
+// the tool call already, and the box has to stay readable.
+const MAX_SHOWN = 1200;
+
+// Show a command whole, or its head plus an ellipsis.
+function truncate(command: string, max: number): string {
+	if (command.length <= max) {
+		return command;
+	}
+	return `${command.slice(0, max)}…`;
+}
+
 export function verdict(command: string): string | undefined {
-	if (COPY_OUT.test(command)) return "copies files onto a remote host";
+	if (COPY_OUT.test(command)) {
+		return "copies files onto a remote host";
+	}
 	const remote = REMOTE.some((p) => p.test(command));
-	if (remote && CHANGING.some((p) => p.test(command))) return "changes a remote host";
-	if (LOCAL.some((p) => p.test(command))) return "changes the network or a service";
+	if (remote && CHANGING.some((p) => p.test(command))) {
+		return "changes a remote host";
+	}
+	if (LOCAL.some((p) => p.test(command))) {
+		return "changes the network or a service";
+	}
 	return undefined;
 }
 
 export default function (pi: ExtensionAPI) {
 	pi.on("tool_call", async (event, ctx) => {
-		if (event.toolName !== "bash") return undefined;
+		if (event.toolName !== "bash") {
+			return;
+		}
 		const command = String((event.input as { command?: unknown }).command ?? "");
 		const why = verdict(command);
-		if (!why) return undefined;
+		if (!why) {
+			return;
+		}
 
 		if (!ctx.hasUI) {
 			return {
@@ -71,9 +97,11 @@ export default function (pi: ExtensionAPI) {
 					"Show the user the exact command and what it changes, and run it only after they say yes.",
 			};
 		}
-		const shown = command.length > 1200 ? `${command.slice(0, 1200)}…` : command;
+		const shown = truncate(command, MAX_SHOWN);
 		const choice = await ctx.ui.select(`⚠️  This command ${why}:\n\n${shown}\n\nRun it?`, ["No", "Yes, run it"]);
-		if (choice === "Yes, run it") return undefined;
+		if (choice === "Yes, run it") {
+			return;
+		}
 		return {
 			block: true,
 			reason:

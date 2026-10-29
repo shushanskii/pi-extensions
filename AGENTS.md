@@ -71,7 +71,7 @@ it and a clone of CI cannot drift from a local run:
 | Script      | Runs                                      | Fails on                                                                                           |
 | ----------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `typecheck` | `tsc -p .`                                | a type error                                                                                       |
-| `lint`      | `biome check`                             | formatting, lint errors, import order — warnings do not fail it                                    |
+| `lint`      | `biome check`                             | formatting, import order, and any rule of Biome's stable set — there are no warnings to ignore     |
 | `analyze`   | `fallow architecture`, `fallow dead-code` | a package importing another, an unclassified source file, a cycle, dead code, an unused dependency |
 | `report`    | `fallow dupes`, `fallow health`           | nothing: it prints duplication and complexity, which are advisory here                             |
 | `fix`       | `biome check --write`                     | nothing — it repairs what Biome can repair                                                         |
@@ -84,9 +84,31 @@ Biome was configured to the code as it already was — tabs, double quotes, 120 
 format diff means drift, not taste. Two details are load-bearing: `vcs.useIgnoreFile` is on,
 which is what makes `.gitignore` mean anything to Biome, and `package-lock.json` is excluded
 by name, because npm writes it with two-space indentation and formatting it would be undone
-by the next install. `noExplicitAny` stays a warning: pi hands extension code untyped
-payloads (`event.messages`, the compaction preparation, a `ctx` read as another shape), and
-the gate is not a licence to rewrite those into `unknown` and narrow them back to `any`.
+by the next install.
+
+The rule set is `preset: "all"` with every group given the severity string `"error"`, which in
+Biome means _all rules of that group_, not the recommended ones, and `lint` passes
+`--error-on-warnings` so a rule downgraded later still fails the run. Nursery stays off — those
+rules change severity between releases — and the framework domains stay off, because a group
+opened by severity also switches on rules about React, Qwik and Tailwind code this repository
+does not contain. Eight rules are switched back off in `overrides`, each with its reason
+written beside it: pi enters a package through its default export, `node:` imports and
+`process.env` are how an extension reaches the machine, and the size and shape metrics belong
+to `report`, which prints them without failing anything. The file is `biome.jsonc`, not
+`biome.json`, for exactly one reason: those reasons have to live next to the switches, and
+strict JSON has no comments.
+
+A rule that cannot be satisfied at the level of a whole repository is switched off there, with
+its reason. One that is impossible only _here_ — a handler pi types as Promise-returning and
+this one has nothing to wait for, two generations that must run one after the other because
+there is one GPU — takes a `// biome-ignore` line carrying the reason. Never both: a rule
+switched off globally to dodge one call site silences every future call site too.
+
+`any` is not tolerated, and `unknown` is not a way to keep an untyped value around unnamed:
+pi's own exported types (`SessionEntry`, `CompactionEntry`, `SessionBeforeCompactEvent`) cover
+session shapes, and a value from outside — a JSON body, a message union — is read field by
+field through small guards. Where pi's declared type is simply narrower than what pi accepts at
+runtime, the cast says so and covers that one field (`reasoning: "off"` in next-prompt).
 
 There are no tests and no linter beyond Biome. A change to a package is verified by loading
 it:
@@ -94,6 +116,15 @@ it:
 ```bash
 pi --no-extensions -e ./packages/<name>
 ```
+
+A change that rewrites logic rather than adding a switch is verified against the previous
+revision, not against hope: `node --experimental-strip-types` imports the old file and the new
+one side by side (type-only imports are erased, so a package whose only pi import is a type
+needs nothing installed beside it), feeds both a fake `pi` and a fake `fetch`, and compares the
+results over a corpus covering the failure paths too. Measured on 2026-10-29 this caught two
+real regressions in a lint-driven rewrite — a dropped plural in a result line, and an error row
+that lost its reason — both of which a type check and a lint run passed silently. Keys that
+changed on purpose are normalised in the comparison, not in the code.
 
 ## A package imports nothing from another package
 

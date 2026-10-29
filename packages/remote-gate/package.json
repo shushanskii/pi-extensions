@@ -1,6 +1,6 @@
 {
 	"name": "@developer/remote-gate",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "ask before a bash call changes a remote host or the network",
 	"keywords": [
 		"pi-package"

@@ -1,6 +1,6 @@
 {
 	"name": "@developer/pi-image",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"description": "the lab's qwen-image as a tool the model can call",
 	"keywords": [
 		"pi-package"

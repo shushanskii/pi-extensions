@@ -1,6 +1,6 @@
 {
 	"name": "@developer/pi-web",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "the lab's Crawl4AI as the tools the model reaches for without thinking",
 	"keywords": [
 		"pi-package"
