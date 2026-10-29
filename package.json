@@ -5,7 +5,7 @@
 	"scripts": {
 		"check": "npm run typecheck && npm run lint && npm run analyze",
 		"typecheck": "tsc -p .",
-		"lint": "biome check --max-diagnostics=none .",
+		"lint": "biome check --error-on-warnings --max-diagnostics=none .",
 		"fix": "biome check --write .",
 		"analyze": "fallow architecture --fail-on-issues && fallow dead-code --fail-on-issues",
 		"report": "fallow dupes; fallow health; exit 0"
