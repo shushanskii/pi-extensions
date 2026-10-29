@@ -27,8 +27,8 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Key } from "@earendil-works/pi-tui";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Key } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 type Config = {
@@ -148,7 +148,7 @@ export default function (pi: ExtensionAPI) {
 
 	function play(wav: Buffer): Promise<void> {
 		const cmd = pickPlayer();
-		if (!cmd) return Promise.reject(new Error("no audio player: set \"player\" in tts.json"));
+		if (!cmd) return Promise.reject(new Error('no audio player: set "player" in tts.json'));
 		const dir = mkdtempSync(join(tmpdir(), "pi-speak-"));
 		const file = join(dir, "say.wav");
 		return new Promise((resolve, reject) => {

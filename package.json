@@ -1,15 +1,22 @@
 {
-  "name": "pi-extensions",
-  "private": true,
-  "description": "The lab's pi extensions, one npm package each in the forge's registry",
-  "scripts": {
-    "check": "tsc -p ."
-  },
-  "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.4.0",
-    "@earendil-works/pi-tui": "1.4.0",
-    "@types/node": "^22",
-    "typebox": "1.4.3",
-    "typescript": "^5"
-  }
+	"name": "pi-extensions",
+	"private": true,
+	"description": "The lab's pi extensions, one npm package each in the forge's registry",
+	"scripts": {
+		"check": "npm run typecheck && npm run lint && npm run analyze",
+		"typecheck": "tsc -p .",
+		"lint": "biome check --max-diagnostics=none .",
+		"fix": "biome check --write .",
+		"analyze": "fallow architecture --fail-on-issues && fallow dead-code --fail-on-issues",
+		"report": "fallow dupes; fallow health; exit 0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.6.4",
+		"@earendil-works/pi-coding-agent": "1.4.0",
+		"@earendil-works/pi-tui": "1.4.0",
+		"@types/node": "^22",
+		"fallow": "^3.37.0",
+		"typebox": "1.4.3",
+		"typescript": "^5"
+	}
 }

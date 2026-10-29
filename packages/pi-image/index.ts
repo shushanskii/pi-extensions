@@ -256,7 +256,7 @@ function openIn(path: string): void {
 }
 
 export default function (pi: ExtensionAPI) {
-	let cfg = loadConfig();
+	const cfg = loadConfig();
 
 	const tool = defineTool({
 		name: "generate_image",
@@ -275,12 +275,20 @@ export default function (pi: ExtensionAPI) {
 		],
 		parameters: Type.Object({
 			prompt: Type.String({ description: "What to draw: subject, medium, light. English works best." }),
-			size: Type.Optional(Type.String({ description: "WIDTHxHEIGHT, both divisible by 32, max 2048. Default 1024x1024." })),
+			size: Type.Optional(
+				Type.String({ description: "WIDTHxHEIGHT, both divisible by 32, max 2048. Default 1024x1024." }),
+			),
 			n: Type.Optional(Type.Number({ description: "How many images, 1..4. Default 1." })),
-			format: Type.Optional(Type.String({ description: "png (default), jpeg or webp. Ignored when steps/seed/negativePrompt are set." })),
-			path: Type.Optional(Type.String({ description: "Where to write. Default: the configured directory, named by time and prompt." })),
+			format: Type.Optional(
+				Type.String({ description: "png (default), jpeg or webp. Ignored when steps/seed/negativePrompt are set." }),
+			),
+			path: Type.Optional(
+				Type.String({ description: "Where to write. Default: the configured directory, named by time and prompt." }),
+			),
 			steps: Type.Optional(
-				Type.Number({ description: "Sampling steps. The server default is 20, and that is the floor: 4 steps came back as noise." }),
+				Type.Number({
+					description: "Sampling steps. The server default is 20, and that is the floor: 4 steps came back as noise.",
+				}),
 			),
 			seed: Type.Optional(Type.Number({ description: "Fix the seed to repeat or vary one composition." })),
 			negativePrompt: Type.Optional(Type.String({ description: "What to push away from." })),

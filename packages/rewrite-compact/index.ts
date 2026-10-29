@@ -32,7 +32,10 @@ import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-a
 const TARGET_WORDS = 2500;
 const MAX_TOKENS = 12288;
 
-function carriedFileLists(event: { preparation: { fileOps: { read: Set<string>; written: Set<string>; edited: Set<string> } }; branchEntries: unknown[] }) {
+function carriedFileLists(event: {
+	preparation: { fileOps: { read: Set<string>; written: Set<string>; edited: Set<string> } };
+	branchEntries: unknown[];
+}) {
 	const read = new Set(event.preparation.fileOps.read);
 	const modified = new Set([...event.preparation.fileOps.edited, ...event.preparation.fileOps.written]);
 	const last = [...event.branchEntries].reverse().find((e: any) => e?.type === "compaction") as any;
@@ -48,7 +51,10 @@ function carriedFileLists(event: { preparation: { fileOps: { read: Set<string>; 
 	return { readFiles, modifiedFiles, text: blocks.length ? `\n\n${blocks.join("\n\n")}` : "" };
 }
 
-const PROMPT = (previous: string, conversation: string) => `You are compacting the history of a coding-agent session. Your output REPLACES the earlier history; the most recent turns are kept verbatim after it, so do not restate them in detail.
+const PROMPT = (
+	previous: string,
+	conversation: string,
+) => `You are compacting the history of a coding-agent session. Your output REPLACES the earlier history; the most recent turns are kept verbatim after it, so do not restate them in detail.
 
 Write ONE self-contained summary of at most ${TARGET_WORDS} words. ${previous ? "The previous summary is given below as INPUT: merge it with the new conversation and rewrite the whole thing. Do not copy it forward — compress finished work to one line each, drop detail that no longer matters for continuing." : ""}
 

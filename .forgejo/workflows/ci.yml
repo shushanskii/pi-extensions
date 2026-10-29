@@ -1,4 +1,25 @@
-# Every push is type-checked against the pi release the packages are written for.
+# Every push to `main` and every pull request is checked the way `npm run check` checks it:
+# types, then Biome (format, lint, import order), then fallow (package boundaries, then dead
+# code). One step per tool, so a failed run names the tool instead of ending in "check
+# failed"; the steps call the same npm scripts the local gate calls, so the two cannot drift
+# apart.
+#
+# `report` is advisory and cannot fail: it prints duplication and complexity, which this
+# repository currently keeps on purpose (one file per extension repeats its registration
+# boilerplate). Make a step of them fail only after that code is restructured.
+#
+# Both tools are native binaries picked per platform, and the runner's CPU decides which ones
+# survive: /proc/cpuinfo there reports `sse4_2` and no AVX at all. Biome's musl build runs in an
+# alpine container anyway — the lint step passed there — but fallow's died a second into the
+# analysis with `fallow binary terminated by signal SIGILL` (exit 132) while the same version
+# works on macOS. So the rule here is not "musl is broken" but "this CPU has no AVX2, and
+# fallow's musl build takes an AVX2 path anyway": the glibc build of the same version runs on
+# the same machine, and Biome's AVX2 (5 372 ymm instructions against fallow's 9 733) never got
+# executed there. Hence a Debian base, where fallow picks @fallow-cli/linux-x64-gnu.
+#
+# The `what this container is` step is what found this: it prints the CPU's own flags, and one
+# line — `sse4_2` and nothing else — explained a signal no local run could reproduce. Keep it.
+#
 # A tag NAME@VERSION (pi-web@1.2.0) publishes packages/NAME to the forge's npm
 # registry — once, after the check, and only when VERSION is what that package.json
 # says, so a tag cannot publish a version the manifest does not carry.
@@ -11,20 +32,47 @@ on:
   push:
     branches: [main]
     tags: ["*@*"]
+  # A gate that first runs after the merge is a gate that reports problems into main.
+  # main is protected and only changes through a pull request, so this trigger is what lets
+  # the check be proved before it lands — which is how the fallow-in-alpine failure below was
+  # caught at all.
+  pull_request:
 
 jobs:
   check:
     runs-on: docker
-    container: { image: node:22-alpine }
+    container: { image: node:22 }
     steps:
       - uses: https://github.com/actions/checkout@v4
       - run: npm ci --no-audit --no-fund
-      - run: npm run check
+      # Reports, never fails: every line ends in `|| true`. A native binary dying by signal is
+      # only diagnosable with these facts, and `--version` here separates "crashes on startup"
+      # from "crashes once it starts reading the repository".
+      - name: what this container is
+        run: |
+          uname -a || true
+          grep -m1 PRETTY_NAME /etc/os-release || true
+          node -v; npm -v
+          grep -m1 '^flags' /proc/cpuinfo | tr ' ' '\n' | grep -E '^(avx|avx2|avx512[a-z0-9]*|sse4_2|bmi[0-9])$' | tr '\n' ' ' || true
+          echo
+          npx fallow --version || true
+      - name: types
+        run: npm run typecheck
+      - name: format and lint
+        run: npm run lint
+      # RUST_BACKTRACE because a Rust abort() loses fallow's buffered stdout — the backtrace
+      # goes to stderr, which is unbuffered, so it is the only trace that survives.
+      - name: boundaries and dead code
+        env: { RUST_BACKTRACE: "1" }
+        run: npm run analyze
+      - name: duplication and complexity (advisory)
+        run: npm run report
 
   publish:
     needs: check
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: docker
+    # Alpine here is fine: this job only runs npm publish, and no native binary is involved.
     container: { image: node:22-alpine }
     steps:
       - uses: https://github.com/actions/checkout@v4

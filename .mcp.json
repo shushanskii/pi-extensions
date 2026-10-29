@@ -1,0 +1,17 @@
+{
+	"mcpServers": {
+		"fallow": {
+			"command": "npx",
+			"args": ["fallow-mcp"],
+			"description": "fallow over this repository: package boundaries, dead code, duplication and complexity — the same graph `npm run analyze` gates on. Read-only: the mutating `fix_apply` and the cloud tools are excluded.",
+			"excludeTools": [
+				"fix_apply",
+				"impact_all",
+				"get_cloud_deployment_changes",
+				"get_cloud_review_packet",
+				"get_cloud_runtime_context"
+			],
+			"approveTools": ["code_execute"]
+		}
+	}
+}

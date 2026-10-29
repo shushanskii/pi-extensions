@@ -56,24 +56,76 @@ before touching that package.
    ```
 
    `POST /repos/developer/pi-extensions/pulls` does work, given a token scoped for the
-   repository (*Settings → Applications*, not the one `~/.npmrc` uses for packages); ask for
+   repository (_Settings → Applications_, not the one `~/.npmrc` uses for packages); ask for
    one rather than assuming it is there.
 
 ## Before proposing a change
 
 ```bash
-npm run check    # tsc -p . — the only gate in the repository
+npm run check    # types, then Biome, then fallow
 ```
 
+`check` is the sum of the scripts beside it, one per tool, so a failure says which tool said
+it and a clone of CI cannot drift from a local run:
+
+| Script      | Runs                                      | Fails on                                                                                           |
+| ----------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `typecheck` | `tsc -p .`                                | a type error                                                                                       |
+| `lint`      | `biome check`                             | formatting, lint errors, import order — warnings do not fail it                                    |
+| `analyze`   | `fallow architecture`, `fallow dead-code` | a package importing another, an unclassified source file, a cycle, dead code, an unused dependency |
+| `report`    | `fallow dupes`, `fallow health`           | nothing: it prints duplication and complexity, which are advisory here                             |
+| `fix`       | `biome check --write`                     | nothing — it repairs what Biome can repair                                                         |
+
 pi loads TypeScript without type-checking it, so a type error is invisible in every run
-until this command runs. It is also why the root `package.json` pins the pi release: the
+until `typecheck` runs. It is also why the root `package.json` pins the pi release: the
 check means nothing if the pinned version drifts from the pi the packages are meant for.
 
-There are no tests and no linter. A change to a package is verified by loading it:
+Biome was configured to the code as it already was — tabs, double quotes, 120 columns — so a
+format diff means drift, not taste. Two details are load-bearing: `vcs.useIgnoreFile` is on,
+which is what makes `.gitignore` mean anything to Biome, and `package-lock.json` is excluded
+by name, because npm writes it with two-space indentation and formatting it would be undone
+by the next install. `noExplicitAny` stays a warning: pi hands extension code untyped
+payloads (`event.messages`, the compaction preparation, a `ctx` read as another shape), and
+the gate is not a licence to rewrite those into `unknown` and narrow them back to `any`.
+
+There are no tests and no linter beyond Biome. A change to a package is verified by loading
+it:
 
 ```bash
 pi --no-extensions -e ./packages/<name>
 ```
+
+## A package imports nothing from another package
+
+Every `packages/<name>` is one fallow zone in `.fallowrc.json` and every zone allows nothing,
+which is what turns "independent packages" from an intention into a check: importing
+`../pi-speak/index.ts` or `@developer/pi-speak` from another package fails `npm run analyze`,
+and the file and the zone it crossed are named. Code that two packages both need becomes a
+package of its own, published the same way — not an import.
+
+`coverage.requireAllFiles` is on, so a source file matching no zone fails too. A new
+directory at the root needs a zone added, and an eighth package needs its zone and its rule:
+forgetting is caught by the gate, not by review.
+
+`fallow report` is not part of `check` on purpose. The duplication it finds is the
+registration boilerplate repeated per extension, and the complexity is one long function per
+extension; both are the shape of this repository, not defects in it.
+
+## fallow is also an MCP server
+
+`.mcp.json` starts `fallow-mcp` from the local `node_modules`, so `npm ci` gives any clone
+the same server the gate uses. The first session in this repository asks to approve it — a
+project server stays blocked until it is approved interactively.
+
+`fix_apply` is excluded: it rewrites files, and removing an export from a published package is
+a public-API change that belongs in a commit somebody reads. The Fallow Cloud tools are
+excluded (this repository is not connected to that account) and the machine-wide `impact_all`
+too. `code_execute` is kept behind an approval.
+
+Without the MCP server the CLI answers the same questions: `npx fallow guard <file>` before
+an edit lists the rules over that file, `npx fallow trace-export <name>` says why an export
+looks unused, and `npx fallow trace-import-path <from> <to>` shows how two modules reach each
+other.
 
 ## A release is part of the change
 

@@ -76,7 +76,8 @@ export default function (pi: ExtensionAPI) {
 		if (choice === "Yes, run it") return undefined;
 		return {
 			block: true,
-			reason: "The user declined this command. Do not retry it or work around it; explain what you wanted to change and ask.",
+			reason:
+				"The user declined this command. Do not retry it or work around it; explain what you wanted to change and ask.",
 		};
 	});
 }

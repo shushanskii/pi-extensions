@@ -35,13 +35,7 @@ import {
 	type ExtensionContext,
 	type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import {
-	CURSOR_MARKER,
-	type EditorTheme,
-	type TUI,
-	truncateToWidth,
-	visibleWidth,
-} from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, type EditorTheme, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 type Config = {
 	enabled: boolean;
@@ -118,9 +112,16 @@ function lastUserText(ctx: ExtensionContext): string {
 
 /** One clean line: the model sometimes quotes it, prefixes it, or wraps it in markdown. */
 function oneLine(raw: string): string {
-	let s = raw.split("\n").map((l) => l.trim()).find((l) => l.length > 0) ?? "";
+	let s =
+		raw
+			.split("\n")
+			.map((l) => l.trim())
+			.find((l) => l.length > 0) ?? "";
 	s = s.replace(/^(next message|user|пользователь|следующий запрос)\s*[:：-]\s*/i, "");
-	s = s.replace(/^[`"'«“]+|[`"'»”]+$/g, "").replace(/\*\*/g, "").trim();
+	s = s
+		.replace(/^[`"'«“]+|[`"'»”]+$/g, "")
+		.replace(/\*\*/g, "")
+		.trim();
 	return s.length > 240 ? `${s.slice(0, 239)}…` : s;
 }
 
@@ -271,7 +272,10 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (arg === "reload") {
 				cfg = loadConfig();
-				ctx.ui.notify(`next-prompt config reloaded (${cfg.userChars}+${cfg.answerChars} chars, ${cfg.maxTokens} tokens)`, "info");
+				ctx.ui.notify(
+					`next-prompt config reloaded (${cfg.userChars}+${cfg.answerChars} chars, ${cfg.maxTokens} tokens)`,
+					"info",
+				);
 				return;
 			}
 			ctx.ui.notify(
