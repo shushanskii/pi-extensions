@@ -8,16 +8,17 @@
 # repository currently keeps on purpose (one file per extension repeats its registration
 # boilerplate). Make a step of them fail only after that code is restructured.
 #
-# Both tools are native binaries picked per platform. Biome's musl build works in an alpine
-# container — the lint step passed there. fallow's does not: it died a second into the analysis
-# with `fallow binary terminated by signal SIGILL` (exit 132), while the same version works on
-# macOS. Why is still open. SIGILL is also how a Rust `abort()` looks, since `abort()` compiles
-# to `ud2`, and the runner asks for `platform=linux/amd64`, so on a non-amd64 host the code runs
-# emulated — and an emulator without AVX2 turns such an instruction into SIGILL. Neither binary
-# uses AVX-512; both use AVX2 (fallow's musl build has 9 733 ymm instructions, Biome's 5 372),
-# so Biome passing only says its AVX2 paths were never executed there.
-# Hence a Debian base, where fallow picks @fallow-cli/linux-x64-gnu, and one step naming the
-# machine's own CPU flags, so that whichever way the next run goes it can be read.
+# Both tools are native binaries picked per platform, and the runner's CPU decides which ones
+# survive: /proc/cpuinfo there reports `sse4_2` and no AVX at all. Biome's musl build runs in an
+# alpine container anyway — the lint step passed there — but fallow's died a second into the
+# analysis with `fallow binary terminated by signal SIGILL` (exit 132) while the same version
+# works on macOS. So the rule here is not "musl is broken" but "this CPU has no AVX2, and
+# fallow's musl build takes an AVX2 path anyway": the glibc build of the same version runs on
+# the same machine, and Biome's AVX2 (5 372 ymm instructions against fallow's 9 733) never got
+# executed there. Hence a Debian base, where fallow picks @fallow-cli/linux-x64-gnu.
+#
+# The `what this container is` step is what found this: it prints the CPU's own flags, and one
+# line — `sse4_2` and nothing else — explained a signal no local run could reproduce. Keep it.
 #
 # A tag NAME@VERSION (pi-web@1.2.0) publishes packages/NAME to the forge's npm
 # registry — once, after the check, and only when VERSION is what that package.json
