@@ -42,11 +42,12 @@ loads only after pi has been told the project is trusted.
 
 1. Edit `packages/<name>/index.ts`. Try it without installing:
    `pi --no-extensions -e ./packages/<name>`.
-2. `npm install && npm run check` — the type check against the pi release pinned in
-   the root `package.json`. pi loads TypeScript without checking it, so a type error
-   is invisible until this runs.
+2. `npm install && npm run check` — types against the pi release pinned in the root
+   `package.json`, then Biome (format, lint, import order) and fallow (package boundaries,
+   dead code). pi loads TypeScript without checking it, so nothing is visible until this
+   runs. `npm run report` adds duplication and complexity as advice, never as a failure.
 3. Bump `version` in `packages/<name>/package.json`, commit, and tag
-   `<name>@<version>` (`git tag pi-web@1.1.0`). Pushing the tag type-checks and
+   `<name>@<version>` (`git tag pi-web@1.1.0`). Pushing the tag runs the same check and
    publishes that one package; a tag whose version differs from the manifest fails.
 4. `pi update npm:@developer/<name>` on each machine.
 

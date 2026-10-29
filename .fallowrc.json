@@ -1,0 +1,26 @@
+{
+	"$schema": "./node_modules/fallow/schema.json",
+	"boundaries": {
+		"zones": [
+			{ "name": "pkg-next-prompt", "patterns": ["packages/next-prompt/**"] },
+			{ "name": "pkg-pi-image", "patterns": ["packages/pi-image/**"] },
+			{ "name": "pkg-pi-speak", "patterns": ["packages/pi-speak/**"] },
+			{ "name": "pkg-pi-web", "patterns": ["packages/pi-web/**"] },
+			{ "name": "pkg-read-window", "patterns": ["packages/read-window/**"] },
+			{ "name": "pkg-remote-gate", "patterns": ["packages/remote-gate/**"] },
+			{ "name": "pkg-rewrite-compact", "patterns": ["packages/rewrite-compact/**"] }
+		],
+		"rules": [
+			{ "from": "pkg-next-prompt", "allow": [] },
+			{ "from": "pkg-pi-image", "allow": [] },
+			{ "from": "pkg-pi-speak", "allow": [] },
+			{ "from": "pkg-pi-web", "allow": [] },
+			{ "from": "pkg-read-window", "allow": [] },
+			{ "from": "pkg-remote-gate", "allow": [] },
+			{ "from": "pkg-rewrite-compact", "allow": [] }
+		],
+		"coverage": {
+			"requireAllFiles": true
+		}
+	}
+}

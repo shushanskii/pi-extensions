@@ -1,4 +1,15 @@
-# Every push is type-checked against the pi release the packages are written for.
+# Every push is checked the way `npm run check` checks it: types, then Biome (format,
+# lint, import order), then fallow (package boundaries, then dead code). One step per
+# tool, so a failed run names the tool instead of ending in "check failed"; the steps call
+# the same npm scripts the local gate calls, so the two cannot drift apart.
+#
+# `report` is advisory and cannot fail: it prints duplication and complexity, which this
+# repository currently keeps on purpose (one file per extension repeats its registration
+# boilerplate). Make a step of them fail only after that code is restructured.
+#
+# Both tools are native binaries picked per platform, and both ship a musl build
+# (@biomejs/cli-linux-x64-musl, @fallow-cli/linux-x64-musl), so node:22-alpine runs them.
+#
 # A tag NAME@VERSION (pi-web@1.2.0) publishes packages/NAME to the forge's npm
 # registry — once, after the check, and only when VERSION is what that package.json
 # says, so a tag cannot publish a version the manifest does not carry.
@@ -19,7 +30,14 @@ jobs:
     steps:
       - uses: https://github.com/actions/checkout@v4
       - run: npm ci --no-audit --no-fund
-      - run: npm run check
+      - name: types
+        run: npm run typecheck
+      - name: format and lint
+        run: npm run lint
+      - name: boundaries and dead code
+        run: npm run analyze
+      - name: duplication and complexity (advisory)
+        run: npm run report
 
   publish:
     needs: check
