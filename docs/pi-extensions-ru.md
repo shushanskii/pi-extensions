@@ -2488,7 +2488,7 @@ export default function (pi: ExtensionAPI) {
 
 ###  Собственное отображение
 
-Инструменты могут задать `renderCall` и `renderResult` для отображения в TUI. Полный API компонентов — в [tui.md](https://pi.dev/docs/latest/tui); как собираются строки инструментов — в [tool-execution.ts](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts).
+Инструменты могут задать `renderCall` и `renderResult` для отображения в TUI. Полный API компонентов — в [tui.md](./pi-tui-ru.md); как собираются строки инструментов — в [tool-execution.ts](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/modes/interactive/components/tool-execution.ts).
 
 По умолчанию вывод инструмента оборачивается в `Box`, который отвечает за фон и горизонтальные отступы из настройки `outputPad`. Рендереры инструментов используются и в HTML-экспортах. Определённые `renderCall` или `renderResult` обязаны вернуть `Component`. Если слот-рендерер не определён, `tool-execution.ts` применяет отображение по умолчанию для этого слота.
 
@@ -2783,7 +2783,7 @@ pi.unregisterMcpServer("jira");
 
 Расширения общаются с пользователем через методы `ctx.ui` и настраивают отображение сообщений и инструментов.
 
-По собственным компонентам, фокусу, оверлеям, темам и производительности отрисовки см. [Terminal UI](https://pi.dev/docs/latest/tui). Перечисленные там примеры показывают списки выбора, переключатели настроек, отменяемые загрузчики, футеры и виджеты.
+По собственным компонентам, фокусу, оверлеям, темам и производительности отрисовки см. [Terminal UI](./pi-tui-ru.md). Перечисленные там примеры показывают списки выбора, переключатели настроек, отменяемые загрузчики, футеры и виджеты.
 
 ###  Диалоги
 
@@ -3039,7 +3039,7 @@ if (result) {
 - `keybindings` — менеджер привязок приложения (проверка сочетаний)
 - `done(value)` — закрыть компонент и вернуть значение
 
-Фабрика может также вернуть `Promise` компонента. Полный пример собственного экрана с кэшированием отрисовки — [Terminal UI](https://pi.dev/docs/latest/tui#build-a-minimal-custom-screen).
+Фабрика может также вернуть `Promise` компонента. Полный пример собственного экрана с кэшированием отрисовки — [Terminal UI](./pi-tui-ru.md#соберите-минимальный-собственный-экран).
 
 ####  Режим оверлея (экспериментально)
 
@@ -3196,7 +3196,7 @@ theme.strikethrough(text)
 theme.style(text, { fg: "success", bg: "toolSuccessBg", bold: true })
 ```
 
-`theme.colors` даёт конкретные цвета, `theme.appearance` — `"dark"` или `"light"`. См. [Корректное применение тем](https://pi.dev/docs/latest/tui#apply-themes-correctly).
+`theme.colors` даёт конкретные цвета, `theme.appearance` — `"dark"` или `"light"`. См. [Корректное применение тем](./pi-tui-ru.md#правильно-применяйте-темы).
 
 Подсветка синтаксиса в собственных рендерерах инструментов:
 
