@@ -23,6 +23,14 @@ Configs live in `~/.pi/agent/`, every key is optional, and each package carries 
 `*.example` of its shape. Secrets stay in the config or in a file it names, never in
 this repository.
 
+## Documentation
+
+[`docs/pi-extensions-ru.md`](docs/pi-extensions-ru.md) is a Russian translation of
+pi's extensions guide (<https://pi.dev/docs/latest/extensions>), and
+[`docs/pi-tui-ru.md`](docs/pi-tui-ru.md) of the terminal UI guide
+(<https://pi.dev/docs/latest/tui>), kept in the repository so the Russian-side
+terms stay searchable.
+
 ## Setting up a machine
 
 npm needs to know where the `@developer` scope lives, and — unless the `developer`

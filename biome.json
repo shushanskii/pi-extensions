@@ -1,0 +1,76 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"ignoreUnknown": true,
+		"includes": ["**", "!**/package-lock.json", "!**/docs"]
+	},
+	"formatter": {
+		"indentStyle": "tab",
+		"lineWidth": 120
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"domains": {
+			"astro": "none",
+			"drizzle": "none",
+			"next": "none",
+			"playwright": "none",
+			"project": "none",
+			"react": "none",
+			"reactNative": "none",
+			"solid": "none",
+			"svelte": "none",
+			"tailwind": "none",
+			"tanstackQuery": "none",
+			"test": "none",
+			"turborepo": "none",
+			"types": "none",
+			"vue": "none",
+			"qwik": "none"
+		},
+		"rules": {
+			"preset": "all",
+			"nursery": "off",
+			"a11y": "error",
+			"complexity": "error",
+			"correctness": "error",
+			"performance": "error",
+			"security": "error",
+			"style": "error",
+			"suspicious": "error"
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noDefaultExport": "off",
+						"noProcessEnv": "off",
+						"noExcessiveLinesPerFile": "off"
+					},
+					"correctness": {
+						"noNodejsModules": "off",
+						"noProcessGlobal": "off"
+					},
+					"complexity": {
+						"noExcessiveCognitiveComplexity": "off",
+						"noExcessiveLinesPerFunction": "off",
+						"useMaxParams": "off"
+					}
+				}
+			}
+		}
+	]
+}
