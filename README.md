@@ -26,8 +26,10 @@ this repository.
 ## Documentation
 
 [`docs/pi-extensions-ru.md`](docs/pi-extensions-ru.md) is a Russian translation of
-pi's extensions guide (<https://pi.dev/docs/latest/extensions>), kept in the
-repository so the Russian-side terms stay searchable.
+pi's extensions guide (<https://pi.dev/docs/latest/extensions>), and
+[`docs/pi-tui-ru.md`](docs/pi-tui-ru.md) of the terminal UI guide
+(<https://pi.dev/docs/latest/tui>), kept in the repository so the Russian-side
+terms stay searchable.
 
 ## Setting up a machine
 
