@@ -84,7 +84,10 @@ Biome was configured to the code as it already was — tabs, double quotes, 120 
 format diff means drift, not taste. Two details are load-bearing: `vcs.useIgnoreFile` is on,
 which is what makes `.gitignore` mean anything to Biome, and `package-lock.json` is excluded
 by name, because npm writes it with two-space indentation and formatting it would be undone
-by the next install. `noExplicitAny` stays a warning: pi hands extension code untyped
+by the next install. A third exclusion, `!**/docs/**`, keeps the translated upstream
+guide in `docs/` untouched: Biome reformats Markdown, tabs inside fenced code blocks
+included, which would rewrite a translation away from the upstream it mirrors.
+`noExplicitAny` stays a warning: pi hands extension code untyped
 payloads (`event.messages`, the compaction preparation, a `ctx` read as another shape), and
 the gate is not a licence to rewrite those into `unknown` and narrow them back to `any`.
 
