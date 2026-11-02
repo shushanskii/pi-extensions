@@ -34,11 +34,15 @@
  * through /upstream/qwen-image/ and start the model by itself. A call is one silent
  * wait, and the figures the guidelines quote are from this box: 19s at 256²/20 steps,
  * 57s at 512²/20, and the first call after five idle minutes also pays the weight
- * load, because the ttl in llama-swap.yaml is 300. 1024² is unmeasured and costs
- * about four times the latents per step.
+ * load, because the ttl in llama-swap.yaml is 300. 1024²/20, the configured default and
+ * therefore the usual request, was measured through this tool on 2026-11-02 at 337s and
+ * 329s, two calls back to back: 5.8× the 512² wait, not the 4× its latent count
+ * predicts, so the extra is the sampler rather than a weight load the second call
+ * skipped. The default request is a five-minute wait.
  *
  * Config: ~/.pi/agent/image.json — the same directory and plaintext convention as
- * tts.json. `/image test` proves the whole path for the price of a 256² thumbnail.
+ * tts.json. `/image test` proves both routes, one after the other on the one GPU, for
+ * the price of two 256² generations — about 40 s of it warm.
  */
 
 import { spawn } from "node:child_process";
@@ -65,10 +69,13 @@ interface Config {
 	/** Where the files go when the caller names no path. */
 	dir: string;
 	/**
-	 * A generation is minutes, not milliseconds. Above ~300s this knob is not the
-	 * binding limit: Node's own fetch abandons a response whose headers have not
-	 * arrived at 300s (measured: `UND_ERR_HEADERS_TIMEOUT` at 301s). Raising this
-	 * only means something once the transport stops being `fetch`.
+	 * A generation is minutes, not milliseconds, and above ~300s this knob is not the
+	 * binding limit: Node's own fetch abandons a response whose headers have not arrived
+	 * (re-measured 2026-11-02 on Node v26.13.0, twice: `UND_ERR_HEADERS_TIMEOUT` at 302s
+	 * from a server that held them for 900s). It has not bitten on this route — a 1024²
+	 * generation ran 337s end to end the same day and completed, so the headers arrive
+	 * long before the pixels do. Raising this only means something once the transport
+	 * stops being `fetch`.
 	 */
 	timeoutMs: number;
 	/** Hand the finished file to the OS opener, the way the voice hands a WAV to afplay. */
@@ -90,7 +97,8 @@ const DEFAULTS: Config = {
 const SIDE_DIVISOR = 32;
 const MIN_SIDE = 256;
 const MAX_SIDE = 2048;
-// One request draws at most this many; the server holds four latents and no more.
+// The clamp for n: zero images is not a request, and the server holds four latents and no
+// more, so a larger n is clamped to four rather than queued here as two waits.
 const MIN_IMAGES = 1;
 const MAX_IMAGES = 4;
 // A file-name slug stops being readable well before it stops being unique.
@@ -515,7 +523,8 @@ export default function (pi: ExtensionAPI) {
 			const small = arg === "test";
 			// A test that can only pass is no test. `/image test` walks both routes, because
 			// llama-swap dispatches them through different middleware and only the OpenAI one
-			// hangs under /v1 — a single-route test would miss the other one entirely.
+			// hangs under /v1 — a single-route test would miss the other one entirely. Both are
+			// 256²: the routes are what is under test, not the pixel count.
 			const dir = tmpdir();
 			const tag = stamp();
 			let calls: Args[] = [{ prompt }];
@@ -527,8 +536,9 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// A widget above the editor, not a notify: a notify is gone in seconds, and the
-			// two generations take 20 s warm and more after a weight load, during which a
-			// silent command reads as a hung one. The lines stay until the next turn starts.
+			// two generations take 40 s warm (19 s each, measured) and more after a weight
+			// load, during which a silent command reads as a hung one. The lines stay until
+			// the next turn starts.
 			const lines: string[] = [];
 			const show = (live?: string) => {
 				if (live) {

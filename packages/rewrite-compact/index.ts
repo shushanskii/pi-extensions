@@ -3,15 +3,20 @@
  *
  * Pi's default summary prompt says "preserve all previous, add new", so every
  * compaction is longer than the one before: on the openwiki session of 2026-10-14
- * the first summary cost 5 103 output tokens, the second 11 978. The cap is
- * min(0.8 * reserveTokens, model.maxTokens), and the summary is generated at the
- * session's thinking level — qwen3.8-flash-next runs at xhigh, which spends up to
- * 8 192 of that cap thinking. The third summary hit the cap, pi discarded it as
- * incomplete, retried every turn, and the context walked up to the 210 000 window.
+ * the first summary cost 5 103 output tokens, the second 11 978, and the third hit
+ * the cap pi applied then — min(0.8 * reserveTokens, model.maxTokens) — was discarded
+ * by pi as incomplete, retried every turn, and the context walked up to the 210 000
+ * window. Pi 1.4.0 has dropped that cap: compaction.js calls its reserveTokens
+ * argument unused and lets a summary run to the model's own output limit, so today
+ * the same prompt grows until it hits the model rather than the reserve. What pi
+ * still does is generate the summary at the session's thinking level — it passes
+ * `reasoning` unless that level is off (compaction.js) — and qwen3.8-flash-next runs
+ * at xhigh, which spent up to 8 192 of one summary's output thinking.
  *
  * Both causes are removed here:
- *   - thinking is off: no `reasoning` option means pi-ai sends the model's
- *     thinkingLevelMap.off ("none"), so the whole cap goes to the summary;
+ *   - thinking is off: the request carries no `reasoning`, which is how off is spelled
+ *     to pi (its ThinkingLevel has no "off", and pi's own summarizer sends the level
+ *     only when it is not off), so the whole output budget goes to the summary;
  *   - the previous summary is input, not a prefix: the model writes one
  *     self-contained summary under a fixed budget, dropping finished detail.
  *
@@ -33,8 +38,10 @@ import {
 	serializeConversation,
 } from "@earendil-works/pi-coding-agent";
 
-// The target the prompt names, and the hard cap. The gap is headroom: a model that
-// overshoots a word budget by half still finishes instead of stopping on length.
+// The word target the prompt names, and the ceiling the request asks for: at run time
+// these become min(MAX_TOKENS, model.maxTokens). The gap between 2 500 words and 12 288
+// tokens is headroom: a model that overshoots a word budget by half still finishes
+// instead of stopping on length, which is the failure this package exists to avoid.
 const TARGET_WORDS = 2500;
 const MAX_TOKENS = 12_288;
 
@@ -150,6 +157,9 @@ export default function (pi: ExtensionAPI) {
 						},
 					],
 				},
+				// cacheRetention "none": a summary is read once and never re-prompted, so
+				// caching it pays the cache-write premium for something with no second read —
+				// the same reasoning pi's own completeSummarization gives for setting it.
 				{ maxTokens, signal, cacheRetention: "none" },
 			);
 

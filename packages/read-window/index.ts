@@ -20,7 +20,7 @@
  * and the read is yours, because you chose the window; and the threshold is
  * line-based, so the 90-line README nobody has to search is never in the way.
  *
- * Measured on this repository, two arms, three runs each, on a 350-line plan:
+ * Measured on this repository, three runs each, on a 350-line plan:
  * reading it whole cost 5.5k tokens of window and 2.3 turns for 6.0 of seven
  * facts; one 70-line window at a section boundary cost 1.2k and got six; a
  * five-window sweep got seven for ten turns. The block is therefore not the win
