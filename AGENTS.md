@@ -59,37 +59,47 @@ before touching that package.
    repository (_Settings → Applications_, not the one `~/.npmrc` uses for packages); ask for
    one rather than assuming it is there.
 
+5. **`AGENTS.md` is edited by the owner.** An agent never adds to or tidies this file on its
+   own, not even when a merge has made a paragraph wrong: it shows the diff and names the
+   paragraph that broke. It types an edit only on the owner's explicit instruction in that
+   session — the owner decides, the agent transcribes. A lesson about the agent's own habits
+   belongs in its own memory, not in every prompt of this repository.
+
 ## Before proposing a change
 
 ```bash
 npm run check    # types, then Biome, then fallow
 ```
 
-`check` is the sum of the scripts beside it, one per tool, so a failure says which tool said
-it and a clone of CI cannot drift from a local run:
+`check` is the sum of the scripts beside it in the root `package.json`, one per tool, so a
+failure names the tool that said it and a clone of CI cannot drift from a local run. The
+scripts say what runs; this says what they do not:
 
-| Script      | Runs                                      | Fails on                                                                                           |
-| ----------- | ----------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `typecheck` | `tsc -p .`                                | a type error                                                                                       |
-| `lint`      | `biome check`                             | formatting, lint errors, import order — warnings do not fail it                                    |
-| `analyze`   | `fallow architecture`, `fallow dead-code` | a package importing another, an unclassified source file, a cycle, dead code, an unused dependency |
-| `report`    | `fallow dupes`, `fallow health`           | nothing: it prints duplication and complexity, which are advisory here                             |
-| `fix`       | `biome check --write`                     | nothing — it repairs what Biome can repair                                                         |
-
-pi loads TypeScript without type-checking it, so a type error is invisible in every run
-until `typecheck` runs. It is also why the root `package.json` pins the pi release: the
-check means nothing if the pinned version drifts from the pi the packages are meant for.
-
-Biome was configured to the code as it already was — tabs, double quotes, 120 columns — so a
-format diff means drift, not taste. Two details are load-bearing: `vcs.useIgnoreFile` is on,
-which is what makes `.gitignore` mean anything to Biome, and `package-lock.json` is excluded
-by name, because npm writes it with two-space indentation and formatting it would be undone
-by the next install. A third exclusion, `!**/docs/**`, keeps the translated upstream
-guide in `docs/` untouched: Biome reformats Markdown, tabs inside fenced code blocks
-included, which would rewrite a translation away from the upstream it mirrors.
-`noExplicitAny` stays a warning: pi hands extension code untyped
-payloads (`event.messages`, the compaction preparation, a `ctx` read as another shape), and
-the gate is not a licence to rewrite those into `unknown` and narrow them back to `any`.
+- pi loads TypeScript without type-checking it, so a type error is invisible in every run
+  until `typecheck` runs; an agent that loaded the package in pi has proven nothing about
+  its types. The root `package.json` pins the pi release the types come from; a check
+  against a drifted pin means nothing.
+- Biome is strict on purpose: every stable rule is an error and `lint` passes
+  `--error-on-warnings`, so a rule downgraded later still fails the run. A format diff is
+  drift, not taste — tabs, double quotes, 120 columns are the code as it is. Three settings
+  carry weight and have no comment beside them in `biome.json`: `vcs.useIgnoreFile` is what
+  makes `.gitignore` mean anything to Biome; `package-lock.json` is excluded because npm
+  would undo any formatting of it on the next install; `!**/docs` is excluded because Biome
+  reformats Markdown, tabs inside fenced code blocks included, which would rewrite a
+  translation away from the upstream it mirrors.
+- A rule that cannot be satisfied at the level of a whole repository is switched off in
+  `biome.json`, its reason in the commit that switched it off. A rule impossible only
+  _here_ — a handler pi types as Promise-returning and this one has nothing to wait for —
+  takes a `// biome-ignore` line carrying the reason. Never both: a rule switched off
+  globally to dodge one call site silences every future call site too.
+- `any` is not tolerated, and `unknown` is not a way to keep an untyped value unnamed:
+  pi's own exported types (`SessionEntry`, `CompactionEntry`, `SessionBeforeCompactEvent`)
+  cover session shapes, and a value from outside — a JSON body, a message union — is read
+  field by field through small guards. The linter stays green for `unknown` plus a cast
+  over the whole payload, and that is the dodge, not the fix: a cast covers one field and
+  says so (`reasoning: "off"` in next-prompt).
+- `fallow report` prints duplication and complexity as advice, never as a failure; both are
+  the shape of this repository, not defects in it.
 
 There are no tests and no linter beyond Biome. A change to a package is verified by loading
 it:
@@ -167,6 +177,16 @@ comment of `index.ts`, not in `README.md` and not in a document beside it: `file
 `index.ts`, so the reasoning travels with the code and cannot drift from it. A change that
 makes the header wrong is not finished. New measurements belong there too, with the numbers
 that produced them and the machine they were taken on.
+
+## Comments are opt-in
+
+An agent adds a comment only where it records a constraint, an invariant, a workaround or a
+measurement the next reader cannot derive from the file — inline, in one literal line, with
+no metaphor the code does not already use. The why of a whole package lives in the header, not
+scattered through its body. A comment over code the change did not touch is not an
+improvement; a comment explaining what the code does is a rename or a split waiting to
+happen. Comments are read back by the next agent run as facts, so one that goes stale is
+worse than none.
 
 ## Config and secrets
 
