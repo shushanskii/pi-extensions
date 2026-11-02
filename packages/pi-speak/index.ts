@@ -31,7 +31,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Key } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
-type Config = {
+interface Config {
 	enabled: boolean;
 	summarize: boolean;
 	endpoint: string;
@@ -42,7 +42,7 @@ type Config = {
 	maxChars: number;
 	player: string | null;
 	summaryPrompt: string;
-};
+}
 
 const DEFAULTS: Config = {
 	enabled: true,
@@ -61,6 +61,30 @@ const DEFAULTS: Config = {
 
 const CONFIG_PATH = join(process.env.HOME ?? "", ".pi", "agent", "tts.json");
 
+// A voice should not read a paragraph: this is how much of an answer one utterance carries.
+const MIN_SENTENCE_CHARS = 80;
+// A WAV header alone is 44 bytes, and the magic number is what separates a real file from the
+// JSON error body that arrives with the same speed.
+const MIN_WAV_BYTES = 44;
+const RIFF_TAG = "RIFF";
+// How much of a wrong response is quoted back before it stops being informative.
+const ERROR_BODY_CHARS = 160;
+const PREVIEW_BYTES = 120;
+// The answer, not the transcript: the summary is of what was said.
+const SUMMARY_INPUT_CHARS = 8000;
+
+// The player this OS ships: afplay on macOS, paplay on Linux, and nothing elsewhere, which
+// surfaces as the "no audio player" error rather than as a guess at a binary.
+function defaultPlayer(): string {
+	if (process.platform === "darwin") {
+		return "afplay";
+	}
+	if (process.platform === "linux") {
+		return "paplay";
+	}
+	return "";
+}
+
 function loadConfig(): Config {
 	try {
 		return { ...DEFAULTS, ...(JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as Partial<Config>) };
@@ -75,80 +99,125 @@ function loadConfig(): Config {
  * else degrades to its own words.
  */
 function speakable(text: string, maxChars: number): string {
-	let out = text
-		.replace(/```[\s\S]*?```/g, " ")
-		.replace(/`([^`]*)`/g, "$1")
-		.replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-		.replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-		.replace(/^\s{0,3}#{1,6}\s+/gm, "")
-		.replace(/^\s*[-*+]\s+/gm, "")
-		.replace(/^\s*>\s?/gm, "")
-		.replace(/\|/g, " ")
-		.replace(/[*_]{1,3}([^*_\n]+)[*_]{1,3}/g, "$1")
-		.replace(/\s+/g, " ")
+	const out = text
+		.replace(/```[\s\S]*?```/gu, " ")
+		.replace(/`(?<inlineCode>[^`]*)`/gu, "$<inlineCode>")
+		.replace(/!\[[^\]]*\]\([^)]*\)/gu, " ")
+		.replace(/\[(?<label>[^\]]*)\]\([^)]*\)/gu, "$<label>")
+		.replace(/^\s{0,3}#{1,6}\s+/gmu, "")
+		.replace(/^\s*[-*+]\s+/gmu, "")
+		.replace(/^\s*>\s?/gmu, "")
+		.replace(/\|/gu, " ")
+		.replace(/[*_]{1,3}(?<emphasis>[^*_\n]+)[*_]{1,3}/gu, "$<emphasis>")
+		.replace(/\s+/gu, " ")
 		.trim();
-	if (out.length <= maxChars) return out;
+	if (out.length <= maxChars) {
+		return out;
+	}
 	// Cut at the last sentence end inside the budget, not at the budget: a voice
 	// stopping mid-word is heard as a broken endpoint.
 	const head = out.slice(0, maxChars);
 	const stop = Math.max(head.lastIndexOf("."), head.lastIndexOf("!"), head.lastIndexOf("?"));
-	out = stop > 80 ? head.slice(0, stop + 1) : head.trim();
-	return out;
+	if (stop > MIN_SENTENCE_CHARS) {
+		return head.slice(0, stop + 1);
+	}
+	return head.trim();
 }
 
-function assistantText(messages: readonly any[]): string {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const m = messages[i];
-		if (m?.role !== "assistant" || !Array.isArray(m.content)) continue;
-		const text = m.content
-			.filter((c: any) => c?.type === "text" && typeof c.text === "string")
-			.map((c: any) => c.text)
-			.join("\n")
-			.trim();
-		if (text) return text;
+// pi's message union carries far more than the two fields read here, so the walk takes
+// `unknown` and checks what it touches instead of asserting a shape.
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function textOf(content: unknown): string {
+	const texts: string[] = [];
+	if (Array.isArray(content)) {
+		for (const part of content) {
+			if (isRecord(part) && part.type === "text" && typeof part.text === "string") {
+				texts.push(part.text);
+			}
+		}
+	}
+	return texts.join("\n").trim();
+}
+
+// The one-line shape of a thrown value, for a notice.
+function messageOf(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message;
+	}
+	return String(error);
+}
+
+function onOff(value: boolean): string {
+	if (value) {
+		return "on";
+	}
+	return "off";
+}
+
+function assistantText(messages: readonly unknown[]): string {
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const message = messages[i];
+		if (isRecord(message) && message.role === "assistant") {
+			const text = textOf(message.content);
+			if (text) {
+				return text;
+			}
+		}
 	}
 	return "";
 }
 
 export default function (pi: ExtensionAPI) {
 	let cfg = loadConfig();
-	let enabled = cfg.enabled;
+	let { enabled } = cfg;
 	let pending: Promise<void> = Promise.resolve();
 	let player: ReturnType<typeof spawn> | undefined;
 	let lastAnswer = "";
 	let warned = false;
 
-	const pickPlayer = () =>
-		cfg.player ?? (process.platform === "darwin" ? "afplay" : process.platform === "linux" ? "paplay" : "");
+	const pickPlayer = () => cfg.player ?? defaultPlayer();
 
 	function notify(ctx: ExtensionContext | undefined, text: string) {
 		// Once per session for the recurring failures: a dead endpoint should not
 		// talk over the terminal on every turn.
-		if (warned || !ctx?.hasUI) return;
+		if (warned || !ctx?.hasUI) {
+			return;
+		}
 		warned = true;
 		ctx.ui.notify(text, "warning");
 	}
 
 	async function synthesize(text: string): Promise<Buffer> {
 		const headers: Record<string, string> = { "Content-Type": "application/json" };
-		if (cfg.apiKey) headers.Authorization = `Bearer ${cfg.apiKey}`;
+		if (cfg.apiKey) {
+			headers.Authorization = `Bearer ${cfg.apiKey}`;
+		}
 		const body: Record<string, unknown> = { model: cfg.model, input: text, speed: cfg.speed };
-		if (cfg.voice) body.voice = cfg.voice;
+		if (cfg.voice) {
+			body.voice = cfg.voice;
+		}
 
 		const res = await fetch(cfg.endpoint, { method: "POST", headers, body: JSON.stringify(body) });
-		if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 160)}`);
+		if (!res.ok) {
+			throw new Error(`${res.status}: ${(await res.text()).slice(0, ERROR_BODY_CHARS)}`);
+		}
 		const wav = Buffer.from(await res.arrayBuffer());
 		// The magic number, because a JSON error body arrives with the same speed
 		// and a client that only counts bytes plays silence and blames the voice.
-		if (wav.length < 44 || wav.subarray(0, 4).toString("latin1") !== "RIFF") {
-			throw new Error(`response is not wav: ${wav.subarray(0, 120).toString("utf8")}`);
+		if (wav.length < MIN_WAV_BYTES || wav.subarray(0, RIFF_TAG.length).toString("latin1") !== RIFF_TAG) {
+			throw new Error(`response is not wav: ${wav.subarray(0, PREVIEW_BYTES).toString("utf8")}`);
 		}
 		return wav;
 	}
 
 	function play(wav: Buffer): Promise<void> {
 		const cmd = pickPlayer();
-		if (!cmd) return Promise.reject(new Error('no audio player: set "player" in tts.json'));
+		if (!cmd) {
+			return Promise.reject(new Error('no audio player: set "player" in tts.json'));
+		}
 		const dir = mkdtempSync(join(tmpdir(), "pi-speak-"));
 		const file = join(dir, "say.wav");
 		return new Promise((resolve, reject) => {
@@ -175,14 +244,16 @@ export default function (pi: ExtensionAPI) {
 
 	/** One sentence from the model that just answered, for the voice to say. */
 	async function summarize(text: string, ctx: ExtensionContext): Promise<string> {
-		if (!cfg.summarize || !ctx.model) return text;
+		if (!(cfg.summarize && ctx.model)) {
+			return text;
+		}
 		const stream = ctx.modelRegistry.streamSimple(
 			ctx.model,
 			{
 				systemPrompt: cfg.summaryPrompt,
 				// The answer, not the transcript: the summary is of what was said,
 				// and the transcript would pay for every tool result again.
-				messages: [{ role: "user", content: text.slice(0, 8000), timestamp: Date.now() }],
+				messages: [{ role: "user", content: text.slice(0, SUMMARY_INPUT_CHARS), timestamp: Date.now() }],
 			},
 			// Thinking off: a reasoning model that deliberates over a one-line
 			// summary is slower than the speech it is preparing. No `reasoning` is
@@ -191,36 +262,56 @@ export default function (pi: ExtensionAPI) {
 			{ maxTokens: 160, temperature: 0.2 },
 		);
 		const msg = await stream.result();
-		const out = (msg.content ?? [])
-			.filter((c: any) => c?.type === "text")
-			.map((c: any) => c.text)
-			.join(" ")
+		const spoken = textOf(msg.content ?? [])
+			.replace(/\n+/gu, " ")
 			.trim();
-		return out || text;
+		return spoken || text;
+	}
+
+	/**
+	 * What the voice says: the text itself when it was written for the voice, otherwise the
+	 * model's one-sentence summary, falling back to the text when the summary fails — silence
+	 * is worse than a long sentence.
+	 */
+	function spokenText(text: string, ctx: ExtensionContext | undefined, raw: boolean): Promise<string> {
+		if (raw || !ctx) {
+			return Promise.resolve(text);
+		}
+		return summarize(text, ctx).catch(() => text);
 	}
 
 	function say(text: string, ctx: ExtensionContext | undefined, raw = false) {
-		const wanted = raw ? text : speakable(text, cfg.maxChars);
-		if (!wanted) return;
+		let wanted = text;
+		if (!raw) {
+			wanted = speakable(text, cfg.maxChars);
+		}
+		if (!wanted) {
+			return;
+		}
 		// Chained, never awaited by the caller: playback outlives the turn, and a
 		// handler that waits for a voice holds the session open.
 		pending = pending
 			.then(async () => {
-				const spoken = raw ? wanted : await summarize(wanted, ctx!).catch(() => wanted);
-				await play(await synthesize(speakable(spoken, cfg.maxChars)));
+				const spoken = await spokenText(wanted, ctx, raw);
+				const wav = await synthesize(speakable(spoken, cfg.maxChars));
+				await play(wav);
 			})
-			.catch((e: unknown) => notify(ctx, `speak: ${String((e as Error)?.message ?? e)}`));
+			.catch((e: unknown) => notify(ctx, `speak: ${messageOf(e)}`));
 	}
 
 	pi.on("agent_end", (event) => {
-		lastAnswer = assistantText(event.messages as readonly any[]);
+		lastAnswer = assistantText(event.messages);
 	});
 
 	pi.on("agent_settled", (event, ctx) => {
 		const text = lastAnswer;
 		lastAnswer = "";
-		if (!enabled || event.aborted || !text) return;
-		if (ctx.mode !== "tui") return;
+		if (!enabled || event.aborted || !text) {
+			return;
+		}
+		if (ctx.mode !== "tui") {
+			return;
+		}
 		say(text, ctx);
 	});
 
@@ -232,7 +323,11 @@ export default function (pi: ExtensionAPI) {
 		parameters: Type.Object({
 			text: Type.String({ description: "One or two plain sentences. No markdown, no code, no paths." }),
 		}),
-		async execute(_id, params, _signal, _onUpdate, ctx) {
+		// pi types execute as Promise-returning; this one answers at once because playback is
+		// chained onto `pending` and outlives the call — waiting for the voice would hold the
+		// tool call open for the length of the sentence.
+		// biome-ignore lint/suspicious/useAwait: the tool type demands a promise, not a wait
+		execute: async (_id, params, _signal, _onUpdate, ctx) => {
 			say(String(params.text ?? ""), ctx as unknown as ExtensionContext, true);
 			return { content: [{ type: "text", text: "spoken" }], details: undefined };
 		},
@@ -240,12 +335,17 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("speak", {
 		description: "Voice: on | off | test | reload | <text to say>",
+		// pi types a command handler as Promise-returning; nothing here waits, it flips a flag
+		// and prints state. The async stays for the type.
+		// biome-ignore lint/suspicious/useAwait: the handler type demands a promise, not a wait
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
 			if (arg === "off" || arg === "on") {
 				enabled = arg === "on";
-				if (!enabled && player) player.kill();
-				ctx.ui.notify(`voice ${enabled ? "on" : "off"} (${cfg.model} @ ${new URL(cfg.endpoint).host})`, "info");
+				if (!enabled && player) {
+					player.kill();
+				}
+				ctx.ui.notify(`voice ${onOff(enabled)} (${cfg.model} @ ${new URL(cfg.endpoint).host})`, "info");
 				return;
 			}
 			if (arg === "test") {
@@ -260,7 +360,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (!arg) {
 				ctx.ui.notify(
-					`voice ${enabled ? "on" : "off"} · ${cfg.endpoint} · model ${cfg.model} · summarize ${cfg.summarize ? "on" : "off"}`,
+					`voice ${onOff(enabled)} · ${cfg.endpoint} · model ${cfg.model} · summarize ${onOff(cfg.summarize)}`,
 					"info",
 				);
 				return;
@@ -271,10 +371,12 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerShortcut(Key.alt("v"), {
 		description: "Toggle the voice",
-		handler: async (ctx) => {
+		handler: (ctx) => {
 			enabled = !enabled;
-			if (!enabled && player) player.kill();
-			ctx.ui.notify(`voice ${enabled ? "on" : "off"}`, "info");
+			if (!enabled && player) {
+				player.kill();
+			}
+			ctx.ui.notify(`voice ${onOff(enabled)}`, "info");
 		},
 	});
 }

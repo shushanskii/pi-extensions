@@ -24,39 +24,87 @@
  * compactions (fromHook: false), so this one carries them from its own previous entry.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
+import {
+	type CompactionEntry,
+	convertToLlm,
+	type ExtensionAPI,
+	type SessionBeforeCompactEvent,
+	type SessionEntry,
+	serializeConversation,
+} from "@earendil-works/pi-coding-agent";
 
 // The target the prompt names, and the hard cap. The gap is headroom: a model that
 // overshoots a word budget by half still finishes instead of stopping on length.
 const TARGET_WORDS = 2500;
-const MAX_TOKENS = 12288;
+const MAX_TOKENS = 12_288;
 
-function carriedFileLists(event: {
-	preparation: { fileOps: { read: Set<string>; written: Set<string>; edited: Set<string> } };
-	branchEntries: unknown[];
-}) {
+// The shape this package writes into its own compaction entry's `details`.
+interface CarriedDetails {
+	readFiles?: string[];
+	modifiedFiles?: string[];
+}
+
+// pi types `details` as unknown because each extension defines its own; reading this package's
+// shape back is therefore a cast — the one narrowing here, and one field rather than a value.
+function lastCompaction(entries: readonly SessionEntry[]): CompactionEntry<CarriedDetails> | undefined {
+	for (let i = entries.length - 1; i >= 0; i -= 1) {
+		const entry = entries[i];
+		if (entry?.type === "compaction") {
+			return entry as CompactionEntry<CarriedDetails>;
+		}
+	}
+	return undefined;
+}
+
+// The one-line shape of a thrown value, for a notice.
+function messageOf(error: unknown): string {
+	if (error instanceof Error) {
+		return error.message;
+	}
+	return String(error);
+}
+
+function carriedFileLists(event: SessionBeforeCompactEvent) {
 	const read = new Set(event.preparation.fileOps.read);
 	const modified = new Set([...event.preparation.fileOps.edited, ...event.preparation.fileOps.written]);
-	const last = [...event.branchEntries].reverse().find((e: any) => e?.type === "compaction") as any;
+	const last = lastCompaction(event.branchEntries);
 	if (last?.fromHook && last.details) {
-		for (const f of last.details.readFiles ?? []) read.add(f);
-		for (const f of last.details.modifiedFiles ?? []) modified.add(f);
+		for (const f of last.details.readFiles ?? []) {
+			read.add(f);
+		}
+		for (const f of last.details.modifiedFiles ?? []) {
+			modified.add(f);
+		}
 	}
 	const readFiles = [...read].filter((f) => !modified.has(f)).sort();
 	const modifiedFiles = [...modified].sort();
-	const blocks = [];
-	if (readFiles.length) blocks.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
-	if (modifiedFiles.length) blocks.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
-	return { readFiles, modifiedFiles, text: blocks.length ? `\n\n${blocks.join("\n\n")}` : "" };
+	const blocks: string[] = [];
+	if (readFiles.length > 0) {
+		blocks.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+	}
+	if (modifiedFiles.length > 0) {
+		blocks.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+	}
+	let text = "";
+	if (blocks.length > 0) {
+		text = `\n\n${blocks.join("\n\n")}`;
+	}
+	return { readFiles, modifiedFiles, text };
 }
 
-const PROMPT = (
-	previous: string,
-	conversation: string,
-) => `You are compacting the history of a coding-agent session. Your output REPLACES the earlier history; the most recent turns are kept verbatim after it, so do not restate them in detail.
+// The summary prompt. The two blocks about a previous summary are built first so the
+// template below is one sentence rather than three conditionals.
+function promptFor(previous: string, conversation: string): string {
+	let mergeNote = "";
+	let previousBlock = "";
+	if (previous) {
+		mergeNote =
+			"The previous summary is given below as INPUT: merge it with the new conversation and rewrite the whole thing. Do not copy it forward — compress finished work to one line each, drop detail that no longer matters for continuing.";
+		previousBlock = `\n<previous_summary>\n${previous}\n</previous_summary>\n`;
+	}
+	return `You are compacting the history of a coding-agent session. Your output REPLACES the earlier history; the most recent turns are kept verbatim after it, so do not restate them in detail.
 
-Write ONE self-contained summary of at most ${TARGET_WORDS} words. ${previous ? "The previous summary is given below as INPUT: merge it with the new conversation and rewrite the whole thing. Do not copy it forward — compress finished work to one line each, drop detail that no longer matters for continuing." : ""}
+Write ONE self-contained summary of at most ${TARGET_WORDS} words. ${mergeNote}
 
 Sections, in this order:
 ## Goal — what the user asked for, in their terms, and any constraints they set.
@@ -67,21 +115,28 @@ Sections, in this order:
 ## Open — unresolved questions and blockers.
 
 Prefer exact paths and names over prose. No preamble, no closing remarks.
-${previous ? `\n<previous_summary>\n${previous}\n</previous_summary>\n` : ""}
+${previousBlock}
 <conversation>
 ${conversation}
 </conversation>`;
+}
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_before_compact", async (event, ctx) => {
 		const { preparation, signal } = event;
 		const { messagesToSummarize, turnPrefixMessages, previousSummary, firstKeptEntryId, tokensBefore } = preparation;
 
-		const model = ctx.model;
-		if (!model) return;
+		const { model } = ctx;
+		if (!model) {
+			return;
+		}
 
 		const conversation = serializeConversation(convertToLlm([...messagesToSummarize, ...turnPrefixMessages]));
-		const maxTokens = Math.min(MAX_TOKENS, model.maxTokens > 0 ? model.maxTokens : MAX_TOKENS);
+		let budget = MAX_TOKENS;
+		if (model.maxTokens > 0) {
+			budget = model.maxTokens;
+		}
+		const maxTokens = Math.min(MAX_TOKENS, budget);
 
 		try {
 			const response = await ctx.modelRegistry.complete(
@@ -90,7 +145,7 @@ export default function (pi: ExtensionAPI) {
 					messages: [
 						{
 							role: "user" as const,
-							content: [{ type: "text" as const, text: PROMPT(previousSummary ?? "", conversation) }],
+							content: [{ type: "text" as const, text: promptFor(previousSummary ?? "", conversation) }],
 							timestamp: Date.now(),
 						},
 					],
@@ -100,7 +155,7 @@ export default function (pi: ExtensionAPI) {
 
 			const summary = response.content
 				.filter((c): c is { type: "text"; text: string } => c.type === "text")
-				.map((c) => c.text)
+				.map(({ text }) => text)
 				.join("\n")
 				.trim();
 
@@ -109,7 +164,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			if (!summary) {
-				if (!signal.aborted) ctx.ui.notify("rewrite-compact: empty summary, using default compaction", "warning");
+				if (!signal.aborted) {
+					ctx.ui.notify("rewrite-compact: empty summary, using default compaction", "warning");
+				}
 				return;
 			}
 
@@ -128,10 +185,11 @@ export default function (pi: ExtensionAPI) {
 				},
 			};
 		} catch (error) {
-			if (signal.aborted) return;
-			const message = error instanceof Error ? error.message : String(error);
+			if (signal.aborted) {
+				return;
+			}
+			const message = messageOf(error);
 			ctx.ui.notify(`rewrite-compact: ${message}, using default compaction`, "error");
-			return;
 		}
 	});
 }

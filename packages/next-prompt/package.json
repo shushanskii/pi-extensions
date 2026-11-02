@@ -1,6 +1,6 @@
 {
 	"name": "@developer/next-prompt",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "a suggested next message, shown as grey ghost text in the empty editor",
 	"keywords": [
 		"pi-package"

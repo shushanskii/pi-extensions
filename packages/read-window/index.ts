@@ -35,31 +35,41 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 const MAX_LINES = 200;
 
 export default function (pi: ExtensionAPI) {
-	pi.on("tool_call", async (event) => {
-		if (event.toolName !== "read") return undefined;
+	pi.on("tool_call", (event) => {
+		if (event.toolName !== "read") {
+			return;
+		}
 
 		const input = event.input as { path?: string; offset?: number; limit?: number };
-		if (!input.path || input.offset !== undefined || input.limit !== undefined) return undefined;
+		if (!input.path || input.offset !== undefined || input.limit !== undefined) {
+			return;
+		}
 
 		// Unreadable here means unreadable there too; never block on a guess.
 		let lines: number;
 		try {
 			const text = readFileSync(input.path, "utf8");
+			const split = text.split("\n");
 			// A trailing newline is not a line: wc -l and this have to agree, or the
 			// refusal quotes a number the reader cannot reproduce.
-			lines = text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+			if (text.endsWith("\n")) {
+				split.pop();
+			}
+			lines = split.length;
 		} catch {
-			return undefined;
+			return;
 		}
-		if (lines <= MAX_LINES) return undefined;
+		if (lines <= MAX_LINES) {
+			return;
+		}
 
 		return {
 			block: true,
 			reason:
 				`${input.path} is ${lines} lines and no window was requested. ` +
 				`Take the shape — ./tools/map.sh ${input.path}, or rg -n '^#{1,3} ' ${input.path} — then read ONE window, ~120 lines, at a section boundary. ` +
-				`A second window goes where the search points, never at the next line after the first: windows that add up to the file cost more than the file did. ` +
-				`If the whole file really is the task, pass an explicit limit and this stops applying.`,
+				"A second window goes where the search points, never at the next line after the first: windows that add up to the file cost more than the file did. " +
+				"If the whole file really is the task, pass an explicit limit and this stops applying.",
 		};
 	});
 }

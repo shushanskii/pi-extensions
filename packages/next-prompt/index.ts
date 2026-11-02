@@ -37,7 +37,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, type EditorTheme, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-type Config = {
+interface Config {
 	enabled: boolean;
 	/** Characters of the agent's last answer sent with the excerpt, taken from its end. */
 	answerChars: number;
@@ -45,7 +45,7 @@ type Config = {
 	userChars: number;
 	maxTokens: number;
 	prompt: string;
-};
+}
 
 const DEFAULTS: Config = {
 	enabled: true,
@@ -61,6 +61,29 @@ const DEFAULTS: Config = {
 };
 
 const CONFIG_PATH = join(process.env.HOME ?? "", ".pi", "agent", "next-prompt.json");
+// A suggestion is one line of ghost text; past this it stops being a hint and becomes a
+// paragraph the user has to read before typing their own.
+const MAX_SUGGESTION = 240;
+// The guess is not creative work; a little randomness only makes it wander.
+const GUESS_TEMPERATURE = 0.3;
+// Editor padding sits on both sides, so usable width is width - pad * PADDING_SIDES.
+const PADDING_SIDES = 2;
+// An empty editor is three rendered lines: top border, content, bottom border. The ghost is
+// drawn on the middle one only, so a taller render means autocomplete is already there.
+const EDITOR_FRAME_LINES = 3;
+
+// What the model sometimes puts in front of the line it was asked for.
+const LEAD_IN = /^(?:next message|user|пользователь|следующий запрос)\s*[:：-]\s*/iu;
+const QUOTES = /^[`"'«“]+|[`"'»”]+$/gu;
+const BOLD = /\*\*/gu;
+
+type StreamOptions = NonNullable<Parameters<ExtensionContext["modelRegistry"]["streamSimple"]>[2]>;
+// pi's options type lists the thinking levels a chat model offers and leaves "off" out, while
+// pi-ai accepts it — EXTENDED_THINKING_LEVELS in pi-ai/models.js — and off is the whole point:
+// a guess that spends thinking tokens arrives after the user has already typed. Widened one
+// field at a time rather than with `as any`, so maxTokens, temperature and signal stay checked.
+const REASONING_OFF = "off" as unknown as StreamOptions["reasoning"];
+
 const WIDGET = "next-prompt";
 const HINT = "↳ suggestion · Enter send · Tab/→ edit · Esc dismiss";
 const GREY = (s: string) => `\x1b[90m${s}\x1b[39m`;
@@ -78,33 +101,56 @@ function loadConfig(): Config {
 }
 
 function textOf(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (!Array.isArray(content)) return "";
-	return content
-		.filter((c: any) => c?.type === "text" && typeof c.text === "string")
-		.map((c: any) => c.text)
-		.join("\n")
-		.trim();
+	if (typeof content === "string") {
+		return content;
+	}
+	const texts: string[] = [];
+	if (Array.isArray(content)) {
+		for (const part of content) {
+			if (isRecord(part) && part.type === "text" && typeof part.text === "string") {
+				texts.push(part.text);
+			}
+		}
+	}
+	return texts.join("\n").trim();
 }
 
-function assistantText(messages: readonly any[]): string {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const m = messages[i];
-		if (m?.role !== "assistant") continue;
-		const text = textOf(m.content);
-		if (text) return text;
+// pi's message and session-entry unions carry far more than the two fields read here, so the
+// walks below take `unknown` and check what they touch instead of asserting a shape.
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function onOff(value: boolean): string {
+	if (value) {
+		return "on";
+	}
+	return "off";
+}
+
+function assistantText(messages: readonly unknown[]): string {
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const message = messages[i];
+		if (isRecord(message) && message.role === "assistant") {
+			const text = textOf(message.content);
+			if (text) {
+				return text;
+			}
+		}
 	}
 	return "";
 }
 
 /** The newest user message on the current branch, as plain text. */
 function lastUserText(ctx: ExtensionContext): string {
-	const branch = ctx.sessionManager.getBranch() as readonly any[];
-	for (let i = branch.length - 1; i >= 0; i--) {
-		const e = branch[i];
-		if (e?.type === "message" && e.message?.role === "user") {
-			const text = textOf(e.message.content);
-			if (text) return text;
+	const branch: readonly unknown[] = ctx.sessionManager.getBranch();
+	for (let i = branch.length - 1; i >= 0; i -= 1) {
+		const entry = branch[i];
+		if (isRecord(entry) && entry.type === "message" && isRecord(entry.message) && entry.message.role === "user") {
+			const text = textOf(entry.message.content);
+			if (text) {
+				return text;
+			}
 		}
 	}
 	return "";
@@ -112,22 +158,21 @@ function lastUserText(ctx: ExtensionContext): string {
 
 /** One clean line: the model sometimes quotes it, prefixes it, or wraps it in markdown. */
 function oneLine(raw: string): string {
-	let s =
+	const firstLine =
 		raw
 			.split("\n")
-			.map((l) => l.trim())
-			.find((l) => l.length > 0) ?? "";
-	s = s.replace(/^(next message|user|пользователь|следующий запрос)\s*[:：-]\s*/i, "");
-	s = s
-		.replace(/^[`"'«“]+|[`"'»”]+$/g, "")
-		.replace(/\*\*/g, "")
-		.trim();
-	return s.length > 240 ? `${s.slice(0, 239)}…` : s;
+			.map((line) => line.trim())
+			.find((line) => line.length > 0) ?? "";
+	const stripped = firstLine.replace(LEAD_IN, "").replace(QUOTES, "").replace(BOLD, "").trim();
+	if (stripped.length > MAX_SUGGESTION) {
+		return `${stripped.slice(0, MAX_SUGGESTION - 1)}…`;
+	}
+	return stripped;
 }
 
 export default function (pi: ExtensionAPI) {
 	let cfg = loadConfig();
-	let enabled = cfg.enabled;
+	let { enabled } = cfg;
 	let lastAnswer = "";
 	// The suggestion currently drawn as ghost text; empty when there is none.
 	let ghost = "";
@@ -148,9 +193,11 @@ export default function (pi: ExtensionAPI) {
 			const lines = super.render(width);
 			// Only an empty, single-line editor gets the ghost: top border, one content line,
 			// bottom border, then whatever autocomplete appends.
-			if (!ghost || this.getText() !== "" || lines.length < 3) return lines;
-			const pad = Math.min(this.getPaddingX(), Math.floor(width / 2));
-			const room = Math.max(1, width - pad * 2 - 1);
+			if (!ghost || this.getText() !== "" || lines.length < EDITOR_FRAME_LINES) {
+				return lines;
+			}
+			const pad = Math.min(this.getPaddingX(), Math.floor(width / PADDING_SIDES));
+			const room = Math.max(1, width - pad * PADDING_SIDES - 1);
 			const text = truncateToWidth(ghost, room, "…");
 			// The marker places the terminal's own cursor at the start; a fake cursor would
 			// paint the first letter in reverse video and make it look typed, not suggested.
@@ -163,10 +210,12 @@ export default function (pi: ExtensionAPI) {
 
 	/** Forget the suggestion and the guess behind it. */
 	function clear(ctx: ExtensionContext | undefined) {
-		generation++;
+		generation += 1;
 		inflight?.abort();
 		inflight = undefined;
-		if (ghost && ctx?.hasUI) ctx.ui.setWidget(WIDGET, undefined);
+		if (ghost && ctx?.hasUI) {
+			ctx.ui.setWidget(WIDGET, undefined);
+		}
 		ghost = "";
 		tui?.requestRender();
 	}
@@ -178,11 +227,16 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	async function guess(ctx: ExtensionContext) {
-		if (!ctx.model) return;
+		if (!ctx.model) {
+			return;
+		}
 		const answer = lastAnswer;
 		const user = lastUserText(ctx);
-		if (!answer && !user) return;
-		const mine = ++generation;
+		if (!(answer || user)) {
+			return;
+		}
+		generation += 1;
+		const mine = generation;
 		const ac = new AbortController();
 		inflight = ac;
 		const excerpt =
@@ -194,40 +248,50 @@ export default function (pi: ExtensionAPI) {
 				{ systemPrompt: cfg.prompt, messages: [{ role: "user", content: excerpt, timestamp: Date.now() }] },
 				// Thinking off and a short cap: the guess has to arrive before the user
 				// starts typing, and every second here is a second the queue is busy.
-				{ maxTokens: cfg.maxTokens, temperature: 0.3, reasoning: "off", signal: ac.signal } as any,
+				{ maxTokens: cfg.maxTokens, temperature: GUESS_TEMPERATURE, reasoning: REASONING_OFF, signal: ac.signal },
 			);
 			const msg = await stream.result();
-			if (mine !== generation || ac.signal.aborted) return;
+			if (mine !== generation || ac.signal.aborted) {
+				return;
+			}
 			const line = oneLine(textOf(msg.content));
 			// Only over an editor that is still empty: never over something the user wrote.
-			if (line && !ctx.ui.getEditorText().trim()) show(ctx, line);
+			if (line && !ctx.ui.getEditorText().trim()) {
+				show(ctx, line);
+			}
 		} catch {
 			// A failed or cancelled guess is silence, not a notification: the user did not ask.
 		} finally {
-			if (inflight === ac) inflight = undefined;
+			if (inflight === ac) {
+				inflight = undefined;
+			}
 		}
 	}
 
 	pi.on("session_start", (_event, ctx) => {
-		if (ctx.mode !== "tui" || unlisten) return;
+		if (ctx.mode !== "tui" || unlisten) {
+			return;
+		}
 		ctx.ui.setEditorComponent((t, theme, keybindings) => new GhostEditor(t, theme, keybindings));
 		unlisten = ctx.ui.onTerminalInput((data) => {
 			if (!ghost) {
 				// A key before the guess arrived: the user is writing their own message.
-				if (inflight) clear(ctx);
-				return undefined;
+				if (inflight) {
+					clear(ctx);
+				}
+				return;
 			}
 			if (ctx.ui.getEditorText() !== "") {
 				// Text got in some other way (paste, history): the ghost is no longer wanted.
 				clear(ctx);
-				return undefined;
+				return;
 			}
 			const text = ghost;
 			if (ENTER.includes(data)) {
 				// Fill the editor first; the Enter that follows submits it.
 				clear(ctx);
 				ctx.ui.setEditorText(text);
-				return undefined;
+				return;
 			}
 			if (KEEP.includes(data)) {
 				// Kept for editing; consumed so Tab does not also open autocomplete.
@@ -237,7 +301,9 @@ export default function (pi: ExtensionAPI) {
 			}
 			clear(ctx);
 			// Esc, Backspace and Delete only dismiss; any other key also types itself.
-			return DISMISS.includes(data) ? { consume: true } : undefined;
+			if (DISMISS.includes(data)) {
+				return { consume: true };
+			}
 		});
 	});
 
@@ -250,24 +316,37 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_start", (_event, ctx) => clear(ctx));
 
 	pi.on("agent_end", (event) => {
-		lastAnswer = assistantText(event.messages as readonly any[]);
+		lastAnswer = assistantText(event.messages);
 	});
 
 	pi.on("agent_settled", (event, ctx) => {
-		if (!enabled || event.aborted || ctx.mode !== "tui") return;
-		if (ctx.ui.getEditorText().trim()) return;
-		// Not awaited: the handler would otherwise hold the session in "settling".
-		void guess(ctx);
+		if (!enabled || event.aborted || ctx.mode !== "tui") {
+			return;
+		}
+		if (ctx.ui.getEditorText().trim()) {
+			return;
+		}
+		// Not awaited: the handler would otherwise hold the session in "settling". A failed
+		// guess is silence, not a notification — the user did not ask for it.
+		guess(ctx).catch(() => {
+			// Deliberately silent.
+		});
 	});
 
 	pi.registerCommand("suggest", {
 		description: "Next-prompt suggestions: on | off | reload",
+		// pi types a command handler as returning Promise<void>, and this handler waits on
+		// nothing: it flips a flag and prints state. The async stays for the type, and the
+		// suppression says why rather than leaving a rule to be re-discovered.
+		// biome-ignore lint/suspicious/useAwait: the handler type demands a promise, not a wait
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
 			if (arg === "on" || arg === "off") {
 				enabled = arg === "on";
-				if (!enabled) clear(ctx);
-				ctx.ui.notify(`next-prompt ${enabled ? "on" : "off"}`, "info");
+				if (!enabled) {
+					clear(ctx);
+				}
+				ctx.ui.notify(`next-prompt ${onOff(enabled)}`, "info");
 				return;
 			}
 			if (arg === "reload") {
@@ -279,7 +358,7 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 			ctx.ui.notify(
-				`next-prompt ${enabled ? "on" : "off"} · model ${ctx.model?.id ?? "none"} · excerpt ${cfg.userChars}+${cfg.answerChars} chars`,
+				`next-prompt ${onOff(enabled)} · model ${ctx.model?.id ?? "none"} · excerpt ${cfg.userChars}+${cfg.answerChars} chars`,
 				"info",
 			);
 		},

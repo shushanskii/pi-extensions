@@ -37,6 +37,10 @@ on:
   # the check be proved before it lands — which is how the fallow-in-alpine failure below was
   # caught at all.
   pull_request:
+  # A run on demand, on any ref, without opening a pull request: the gate can be re-proved by
+  # `POST /api/v1/repos/{owner}/{repo}/actions/workflows/ci.yml/dispatches`, which is how a
+  # change to the gate itself gets tested before anything merges.
+  workflow_dispatch:
 
 jobs:
   check:
