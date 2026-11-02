@@ -1,0 +1,32 @@
+{
+	"name": "@shushanskii/pi-telegram",
+	"version": "0.2.1-lab.1",
+	"description": "a private Telegram bot as a second window into the running pi session; fork of @qusic/pi-telegram",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
+	"keywords": [
+		"pi-package"
+	],
+	"license": "MIT",
+	"files": [
+		"src",
+		"LICENSE",
+		"README.md"
+	],
+	"pi": {
+		"extensions": [
+			"./src/index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-agent-core": "*",
+		"@earendil-works/pi-ai": "*",
+		"@earendil-works/pi-coding-agent": "*",
+		"typebox": "*"
+	},
+	"publishConfig": {
+		"registry": "https://npm.pkg.github.com/"
+	}
+}
