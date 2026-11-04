@@ -31,9 +31,16 @@ before touching that package.
    read in. Russian belongs to the chat and to session notes, never to a file here.
 
 4. **`main` is protected — only a merged pull request changes it.** Direct pushes are refused
-   by the server, not by convention, and a merge waits for a green `check` job. Work happens
-   on the branch and arrives by pull request; merging is an action of its own, so it needs its
-   own approval under rule 2.
+   by the server, not by convention: pushing to `main` ends in `GH006: Protected branch update
+   failed` carrying `Changes must be made through a pull request` and `Required status check
+   "check" is expected`, and it ends that way for the owner's push as well — the protection
+   applies to admins. Work happens on the branch and arrives by pull request; merging is an
+   action of its own, so it needs its own approval under rule 2.
+
+   That gate exists only while the repository is public. On the current plan a private
+   repository gets neither branch protection nor rulesets — both APIs answer `Upgrade to
+   GitHub Pro or make this repository public to enable this feature` — so making this
+   repository private removes the gate itself, not just this sentence about it.
 
    **Opening a pull request is the user's click; the agent's part ends with a link and a
    description.** After the push, hand over the compare URL, plus the text to paste — the
