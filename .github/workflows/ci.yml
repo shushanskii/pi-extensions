@@ -15,10 +15,14 @@
 # /proc/cpuinfo reported `sse4_2` and no AVX at all, so the rule is not "musl is broken" but
 # "that CPU has no AVX2, and fallow's musl build takes an AVX2 path anyway" — the glibc build
 # of the same version ran on the same machine. Hence a Debian base, where fallow picks
-# @fallow-cli/linux-x64-gnu. The base is carried over from that measurement rather than
-# re-derived for GitHub's runners, and the step that found the reason still prints the CPU's
-# own flags on every run, so the first run here says whether the constraint binds at all.
-# Keep it: it is the only thing that ever explained a signal no local run could reproduce.
+# @fallow-cli/linux-x64-gnu.
+#
+# The first run on GitHub measured that constraint away: the runner's /proc/cpuinfo carries
+# `avx2` and avx512 through `avx512vbmi`, and fallow 3.37.0 verified its linux-x64-gnu sentinel
+# there. The base is therefore no longer a workaround for this runner's CPU but the reason the
+# job picks a build already known good. The step that found the original reason stays: it is
+# the only thing that ever explained a signal no local run could reproduce, and it costs one
+# line.
 #
 # A tag NAME@VERSION (pi-web@1.2.0) publishes packages/NAME to GitHub Packages — once, after
 # the check, and only when VERSION is what that package.json says, so a tag cannot publish a
