@@ -2,21 +2,27 @@
 	"$schema": "./node_modules/fallow/schema.json",
 	"boundaries": {
 		"zones": [
-			{ "name": "pkg-next-prompt", "patterns": ["packages/next-prompt/**"] },
-			{ "name": "pkg-pi-image", "patterns": ["packages/pi-image/**"] },
-			{ "name": "pkg-pi-speak", "patterns": ["packages/pi-speak/**"] },
-			{ "name": "pkg-pi-web", "patterns": ["packages/pi-web/**"] },
-			{ "name": "pkg-read-window", "patterns": ["packages/read-window/**"] },
-			{ "name": "pkg-remote-gate", "patterns": ["packages/remote-gate/**"] },
-			{ "name": "pkg-rewrite-compact", "patterns": ["packages/rewrite-compact/**"] }
+			{ "name": "tests", "patterns": ["tests/**", "vitest.config.mts"] },
+			{ "name": "pkg-next-prompt", "patterns": ["packages/next-prompt/index.ts"] },
+			{ "name": "pkg-pi-image", "patterns": ["packages/pi-image/index.ts"] },
+			{ "name": "pkg-pi-image-test", "patterns": ["packages/pi-image/test/**"] },
+			{ "name": "pkg-pi-speak", "patterns": ["packages/pi-speak/index.ts"] },
+			{ "name": "pkg-pi-web", "patterns": ["packages/pi-web/index.ts"] },
+			{ "name": "pkg-read-window", "patterns": ["packages/read-window/index.ts"] },
+			{ "name": "pkg-remote-gate", "patterns": ["packages/remote-gate/index.ts"] },
+			{ "name": "pkg-remote-gate-test", "patterns": ["packages/remote-gate/test/**"] },
+			{ "name": "pkg-rewrite-compact", "patterns": ["packages/rewrite-compact/index.ts"] }
 		],
 		"rules": [
+			{ "from": "tests", "allow": [] },
 			{ "from": "pkg-next-prompt", "allow": [] },
 			{ "from": "pkg-pi-image", "allow": [] },
+			{ "from": "pkg-pi-image-test", "allow": ["tests", "pkg-pi-image"] },
 			{ "from": "pkg-pi-speak", "allow": [] },
 			{ "from": "pkg-pi-web", "allow": [] },
 			{ "from": "pkg-read-window", "allow": [] },
 			{ "from": "pkg-remote-gate", "allow": [] },
+			{ "from": "pkg-remote-gate-test", "allow": ["tests", "pkg-remote-gate"] },
 			{ "from": "pkg-rewrite-compact", "allow": [] }
 		],
 		"coverage": {
