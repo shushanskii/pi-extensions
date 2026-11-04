@@ -68,8 +68,9 @@ const MAX_SUGGESTION = 240;
 const GUESS_TEMPERATURE = 0.3;
 // Editor padding sits on both sides, so usable width is width - pad * PADDING_SIDES.
 const PADDING_SIDES = 2;
-// An empty editor is three rendered lines: top border, content, bottom border. The ghost is
-// drawn on the middle one only, so a taller render means autocomplete is already there.
+// An empty editor is three rendered lines: top border, content, bottom border. Fewer than
+// that is not the editor this file knows, so the ghost stays off; more is the same frame
+// with autocomplete appended below it, so the content line stays the middle one.
 const EDITOR_FRAME_LINES = 3;
 
 // What the model sometimes puts in front of the line it was asked for.

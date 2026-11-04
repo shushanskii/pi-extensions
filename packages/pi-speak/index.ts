@@ -19,7 +19,8 @@
  * answer is the answer.
  *
  * Config: ~/.pi/agent/tts.json, same directory and plaintext convention as stt.json.
- * Toggle: /speak, or alt+v anywhere. Nothing is spoken in print/JSON mode — those runs
+ * Switching: `/speak on` and `/speak off`, or alt+v anywhere; a bare `/speak` only
+ * prints what is in force. Nothing is spoken in print/JSON mode — those runs
  * are piped, and a voice on a pipe is a bug report.
  */
 
@@ -61,7 +62,10 @@ const DEFAULTS: Config = {
 
 const CONFIG_PATH = join(process.env.HOME ?? "", ".pi", "agent", "tts.json");
 
-// A voice should not read a paragraph: this is how much of an answer one utterance carries.
+// Not the budget — that is `maxChars` in tts.json, 600 by default. When an answer
+// overflows it, the cut is taken at the last sentence end inside the budget, but only if
+// that end sits past this floor: text whose only period lands at character 40 would
+// otherwise be spoken as 40 characters out of the 600 it was given.
 const MIN_SENTENCE_CHARS = 80;
 // A WAV header alone is 44 bytes, and the magic number is what separates a real file from the
 // JSON error body that arrives with the same speed.
@@ -256,9 +260,11 @@ export default function (pi: ExtensionAPI) {
 				messages: [{ role: "user", content: text.slice(0, SUMMARY_INPUT_CHARS), timestamp: Date.now() }],
 			},
 			// Thinking off: a reasoning model that deliberates over a one-line
-			// summary is slower than the speech it is preparing. No `reasoning` is
-			// how off is spelled — pi-ai then sends the model's thinkingLevelMap.off;
-			// "off" itself is not a level the option accepts (rewrite-compact, same).
+			// summary is slower than the speech it is preparing. Leaving `reasoning`
+			// out is how off is spelled — pi's ThinkingLevel starts at "minimal" and
+			// has no "off" to pass, and pi's own summarizer sends the session level
+			// only when it is not off (compaction.js), so an absent option is the only
+			// way to say no thinking. rewrite-compact does the same.
 			{ maxTokens: 160, temperature: 0.2 },
 		);
 		const msg = await stream.result();

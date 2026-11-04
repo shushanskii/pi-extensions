@@ -23,17 +23,21 @@
  *
  * Why /md falls back. A content filter answers an empty page with `success: true`
  * (the fetch service's README, Gotchas): bm25 with a query nothing matches, or fit on a
- * page Readability cannot shape. An empty answer is retried down bm25 → fit → raw
- * before it is reported as empty, and the filter that produced the text is named.
+ * page Readability cannot shape. An empty answer is retried down the chain — bm25 → fit
+ * → raw with a query, fit → raw without one, raw alone when asked for — before it is
+ * reported as empty, and the header of every answer names the filter that produced it.
  *
  * Why the competitors are switched off here. A better tool next to the old ones is a
- * fifth way, not a replacement. pi-searxng's `fetch_content` is removed from the
- * active set on every session start. The fetcher's own MCP tools (`fetch_*`) are
- * removed too: everything they did that works is here, and `fetch_execute_js` never
- * worked — the server keeps that endpoint off on purpose (the fetch service's README) and
- * answers 403. Their adapter entry is gone from mcp-adapter.json; the names stay in
- * the list so that re-adding it does not bring back a second way. Bash stays; the
- * guidelines say what curl is still for.
+ * fifth way, not a replacement. `retire()` drops the retired names from the active tool
+ * set on every session start, and again before every agent start because the MCP adapter
+ * connects after load. The names it drops are pi-searxng's `fetch_content` and the seven
+ * `fetch_*` the fetcher's MCP adapter exposed: everything they did that works is here,
+ * and `fetch_execute_js` never worked — the server keeps that endpoint off on purpose
+ * (the fetch service's README) and answers 403. Their adapter entry is gone from
+ * mcp-adapter.json; the names stay in the list so that re-adding it does not bring back
+ * a second way, and `/web` names any survivor — under these names, or under an
+ * `mcp__fetch…` prefix this file does not match — rather than keeping silent about a
+ * tool it did not remove. Bash stays; the guidelines say what curl is still for.
  *
  * Config: ~/.pi/agent/web.json — the same directory and plaintext convention as
  * tts.json and image.json, and every key optional. Read on every call, like the
@@ -93,6 +97,8 @@ const EDGE_DASHES = /^-+|-+$/gu;
 const TRAILING_DASH = /-+$/u;
 const WHITESPACE_RUN = /\s+/gu;
 const BLOCKED = /URL blocked/iu;
+// The adapter's other possible spelling, read by `/web` only: a tool matching it is a
+// second way to read a page still on the menu, and `retire()` cannot match it to remove it.
 const MCP_FETCH_TOOL = /^mcp__fetch/u;
 
 // The fetcher's answers are JSON of a shape this file does not own, so they are read field by
@@ -188,6 +194,10 @@ function expand(p: string): string {
 	return p;
 }
 
+// Tools this file replaces, dropped from the active set by `retire()`: pi-searxng's
+// fetch_content plus the seven fetch_* the fetcher's MCP adapter exposed. The match is on
+// whole names, so a tool that arrives under another spelling is not removed here — `/web`
+// reports it instead of pretending otherwise.
 const RETIRED = [
 	"fetch_content",
 	"fetch_md",
