@@ -7,7 +7,7 @@
 	},
 	"files": {
 		"ignoreUnknown": true,
-		"includes": ["**", "!**/package-lock.json", "!**/docs"]
+		"includes": ["**", "!**/package-lock.json", "!**/docs", "!packages/pi-telegram/src"]
 	},
 	"formatter": {
 		"indentStyle": "tab",

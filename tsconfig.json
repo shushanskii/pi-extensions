@@ -9,5 +9,5 @@
 		"skipLibCheck": true,
 		"types": ["node"]
 	},
-	"include": ["packages/*/index.ts", "packages/*/test/**/*.ts", "tests/**/*.ts"]
+	"include": ["packages/*/index.ts", "packages/*/test/**/*.ts", "packages/pi-telegram/src/index.ts", "tests/**/*.ts"]
 }
