@@ -9,24 +9,33 @@
 # boilerplate). Make a step of them fail only after that code is restructured.
 #
 # Both tools are native binaries picked per platform, and the runner's CPU decides which ones
-# survive: /proc/cpuinfo there reports `sse4_2` and no AVX at all. Biome's musl build runs in an
-# alpine container anyway — the lint step passed there — but fallow's died a second into the
-# analysis with `fallow binary terminated by signal SIGILL` (exit 132) while the same version
-# works on macOS. So the rule here is not "musl is broken" but "this CPU has no AVX2, and
-# fallow's musl build takes an AVX2 path anyway": the glibc build of the same version runs on
-# the same machine, and Biome's AVX2 (5 372 ymm instructions against fallow's 9 733) never got
-# executed there. Hence a Debian base, where fallow picks @fallow-cli/linux-x64-gnu.
+# survive. On the runner this repository built on before GitHub, fallow's musl build died a
+# second into the analysis with `fallow binary terminated by signal SIGILL` (exit 132) while
+# the same version worked on macOS. `what this container is` found the reason there:
+# /proc/cpuinfo reported `sse4_2` and no AVX at all, so the rule is not "musl is broken" but
+# "that CPU has no AVX2, and fallow's musl build takes an AVX2 path anyway" — the glibc build
+# of the same version ran on the same machine. Hence a Debian base, where fallow picks
+# @fallow-cli/linux-x64-gnu.
 #
-# The `what this container is` step is what found this: it prints the CPU's own flags, and one
-# line — `sse4_2` and nothing else — explained a signal no local run could reproduce. Keep it.
+# The first run on GitHub measured that constraint away: the runner's /proc/cpuinfo carries
+# `avx2` and avx512 through `avx512vbmi`, and fallow 3.37.0 verified its linux-x64-gnu sentinel
+# there. The base is therefore no longer a workaround for this runner's CPU but the reason the
+# job picks a build already known good. The step that found the original reason stays: it is
+# the only thing that ever explained a signal no local run could reproduce, and it costs one
+# line.
 #
-# A tag NAME@VERSION (pi-web@1.2.0) publishes packages/NAME to the forge's npm
-# registry — once, after the check, and only when VERSION is what that package.json
-# says, so a tag cannot publish a version the manifest does not carry.
+# A tag NAME@VERSION (pi-web@1.2.0) publishes packages/NAME to GitHub Packages — once, after
+# the check, and only when VERSION is what that package.json says, so a tag cannot publish a
+# version the manifest does not carry.
 #
-# The token is REGISTRY_TOKEN, the same write:package token srv02/k3s's image
-# workflow pushes with (gw-router: srv02/k3s/README.md): a task token is refused by
-# the registry, and the refusal names nothing.
+# Publishing needs no secret of its own. GITHUB_TOKEN may publish packages belonging to the
+# repository the workflow runs in, and a package whose `repository` field names this
+# repository inherits its permissions, which is what grants that token the write. Two
+# constraints of this registry are the reason each package manifest says what it says: the
+# scope has to name the account that owns the repository, because the registry routes a
+# package by its scope, and it accepts GITHUB_TOKEN or a personal access token (classic) and
+# not a fine-grained token, so a machine that installs these packages needs a classic token
+# with read:packages in its ~/.npmrc.
 name: ci
 on:
   push:
@@ -38,16 +47,19 @@ on:
   # caught at all.
   pull_request:
   # A run on demand, on any ref, without opening a pull request: the gate can be re-proved by
-  # `POST /api/v1/repos/{owner}/{repo}/actions/workflows/ci.yml/dispatches`, which is how a
-  # change to the gate itself gets tested before anything merges.
+  # `gh workflow run ci.yml --ref <ref>`, which is how a change to the gate itself gets tested
+  # before anything merges.
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   check:
-    runs-on: docker
+    runs-on: ubuntu-latest
     container: { image: node:22 }
     steps:
-      - uses: https://github.com/actions/checkout@v4
+      - uses: actions/checkout@v4
       - run: npm ci --no-audit --no-fund
       # Reports, never fails: every line ends in `|| true`. A native binary dying by signal is
       # only diagnosable with these facts, and `--version` here separates "crashes on startup"
@@ -75,14 +87,17 @@ jobs:
   publish:
     needs: check
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     # Alpine here is fine: this job only runs npm publish, and no native binary is involved.
     container: { image: node:22-alpine }
     steps:
-      - uses: https://github.com/actions/checkout@v4
+      - uses: actions/checkout@v4
       - name: publish the package the tag names
         env:
-          REGISTRY_TOKEN: ${{ secrets.REGISTRY_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
           set -eu
@@ -91,7 +106,9 @@ jobs:
           [ -f "$dir/package.json" ] || { echo "tag $TAG names no package: $dir/package.json is missing"; exit 1; }
           declared=$(node -p "require('./$dir/package.json').version")
           [ "$declared" = "$version" ] || { echo "tag says $version, $dir/package.json says $declared"; exit 1; }
-          [ -n "$REGISTRY_TOKEN" ] || { echo "secret REGISTRY_TOKEN is not set for this repository or its owner"; exit 1; }
-          reg=git.rezolver-zero.com/api/packages/developer/npm/
-          printf '@developer:registry=https://%s\n//%s:_authToken=%s\n' "$reg" "$reg" "$REGISTRY_TOKEN" > "$HOME/.npmrc"
+          # Checked here so a scope that cannot be published from this repository fails with
+          # this line rather than with an authentication error from the registry.
+          scope=$(node -p "require('./$dir/package.json').name.split('/')[0]")
+          [ "$scope" = "@shushanskii" ] || { echo "tag $TAG names $scope; this repository can only publish under @shushanskii"; exit 1; }
+          printf '@shushanskii:registry=https://npm.pkg.github.com\n//npm.pkg.github.com/:_authToken=%s\n' "$GITHUB_TOKEN" > "$HOME/.npmrc"
           npm publish "./$dir"

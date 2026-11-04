@@ -1,7 +1,7 @@
 /**
  * pi-image — the lab's qwen-image as a tool the model can call.
  *
- * The box already draws. srv02/llm runs stable-diffusion.cpp's sd-server behind
+ * The box already draws. The lab's LLM host runs stable-diffusion.cpp's sd-server behind
  * llama-swap under the name `qwen-image`, and llama-swap forwards
  * /v1/images/generations to it the way it forwards /v1/audio/speech to piper. This
  * file is the other end: one POST, one PNG on disk, and the same PNG handed back as

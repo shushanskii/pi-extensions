@@ -1,7 +1,11 @@
 {
-	"name": "@developer/next-prompt",
+	"name": "@shushanskii/next-prompt",
 	"version": "1.0.2",
 	"description": "a suggested next message, shown as grey ghost text in the empty editor",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
 	"keywords": [
 		"pi-package"
 	],
@@ -22,6 +26,6 @@
 		"typebox": "*"
 	},
 	"publishConfig": {
-		"registry": "https://git.rezolver-zero.com/api/packages/developer/npm/"
+		"registry": "https://npm.pkg.github.com/"
 	}
 }

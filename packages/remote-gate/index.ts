@@ -1,10 +1,10 @@
 /**
  * remote-gate — ask before a bash call changes a remote host or the network.
  *
- * The lab's rule (gw-router AGENTS.md, "Boundaries") is that a command over SSH runs only
+ * The lab's rule (the gateway repository's AGENTS.md, "Boundaries") is that a command over SSH runs only
  * after the user approves that specific action. A rule kept only in a prompt is kept by
  * memory, and on 2026-10-27 memory lost: an agent "tried a route and rolled it back" on
- * the gateway — `ip route replace 192.168.100.0/24 via 192.168.100.13`, then `ip route
+ * the gateway — `ip route replace <guest net> via <next hop>`, then `ip route
  * del` of the same — and `replace` had overwritten the kernel's own route to the guest
  * network, so the rollback deleted the only one. Every guest lost DNS and the internet
  * until the route was added back by hand. This puts the rule in the tool path instead.

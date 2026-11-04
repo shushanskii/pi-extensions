@@ -1,7 +1,7 @@
 {
 	"name": "pi-extensions",
 	"private": true,
-	"description": "The lab's pi extensions, one npm package each in the forge's registry",
+	"description": "The lab's pi extensions, one npm package each, published to GitHub Packages",
 	"scripts": {
 		"check": "npm run typecheck && npm run lint && npm run analyze",
 		"typecheck": "tsc -p .",

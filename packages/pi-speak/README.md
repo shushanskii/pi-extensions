@@ -3,8 +3,8 @@
 One spoken sentence at the end of a turn, in Russian.
 
 ```bash
-pi install npm:@developer/pi-speak
-pi remove npm:@developer/pi-speak
+pi install npm:@shushanskii/pi-speak
+pi remove npm:@shushanskii/pi-speak
 ```
 
 Config: `~/.pi/agent/tts.json`, every key optional — the defaults are the working values. Shape: [`tts.json.example`](./tts.json.example).
