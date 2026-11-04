@@ -6,13 +6,20 @@
  */
 
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { type FakeServer, IMAGE_ROUTES, scriptedModels, startFakeServer } from "../../../tests/fake-server.ts";
+import { type FakeServer, HTTP_OK, IMAGE_ROUTES, scriptedModels, startFakeServer } from "../../../tests/fake-server.ts";
 import { type Home, makeHome } from "../../../tests/home.ts";
 import { startTui, type Tui } from "../../../tests/tui.ts";
 
 let server: FakeServer;
 let home: Home;
 let tui: Tui;
+
+/** Slow enough that the live line is on screen long enough to be read. */
+const ROUTE_DELAY_MS = 3000;
+const GENERATIONS_DONE =
+	/^ image: ✓ 1\/2 images\/generations \d+s — <HOME>\/tmp\/pi-image-test-\d+-\d+\.png \(size 256x256, png\)$/u;
+const SDAPI_DONE =
+	/^ image: ✓ 2\/2 sdapi\/txt2img \d+s — <HOME>\/tmp\/pi-image-test-\d+-\d+-sdapi\.png \(steps 12, cfg 6, seed -1\)$/u;
 
 beforeAll(async () => {
 	server = await startFakeServer();
@@ -29,9 +36,8 @@ afterAll(async () => {
 });
 
 test("/image test keeps a widget above the editor until the next turn", async () => {
-	// Slow enough that the live line is on screen long enough to be read.
 	const path = "/v1/images/generations";
-	server.route(path, 200, IMAGE_ROUTES[path]?.body, 3_000);
+	server.route(path, HTTP_OK, IMAGE_ROUTES[path]?.body, ROUTE_DELAY_MS);
 
 	await tui.submit("/image test");
 	// The counter has to move: a frozen "… 0s" reads as a hung command, which is what the widget is for.
@@ -39,14 +45,7 @@ test("/image test keeps a widget above the editor until the next turn", async ()
 	expect(await tui.aboveEditor()).toEqual([" image: 1/2 images/generations … 1s"]);
 
 	await tui.term.getByText("image: done in").expect({ timeout: 10_000 });
-	expect(await tui.aboveEditor()).toEqual([
-		expect.stringMatching(
-			/^ image: ✓ 1\/2 images\/generations \d+s — <HOME>\/tmp\/pi-image-test-\d+-\d+\.png \(size 256x256, png\)$/,
-		),
-		expect.stringMatching(
-			/^ image: ✓ 2\/2 sdapi\/txt2img \d+s — <HOME>\/tmp\/pi-image-test-\d+-\d+-sdapi\.png \(steps 12, cfg 6, seed -1\)$/,
-		),
-	]);
+	expect(await tui.aboveEditor()).toEqual([expect.stringMatching(GENERATIONS_DONE), expect.stringMatching(SDAPI_DONE)]);
 
 	server.script({ text: "the next turn" });
 	await tui.submit("hello");

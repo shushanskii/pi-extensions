@@ -10,16 +10,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-export type Home = {
+export interface Home {
 	/** The directory to pass as HOME. */
 	dir: string;
 	/** A directory inside it to pass as TMPDIR. */
 	tmp: string;
 	/** Write `~/.pi/agent/<name>` inside it, JSON-encoded. settings.json is already there, retries off. */
-	agentFile(name: string, value: unknown): void;
+	agentFile: (name: string, value: unknown) => void;
 	/** Remove the directory and everything pi wrote into it. */
-	dispose(): void;
-};
+	dispose: () => void;
+}
 
 export function makeHome(): Home {
 	const dir = mkdtempSync(join(tmpdir(), "pi-ext-test-"));

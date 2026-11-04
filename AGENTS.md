@@ -112,7 +112,8 @@ through `tests/print.ts`. Both live in the `rpc` project, which is really "every
 needs no screen". `*.tui.ts` drives the interactive TUI through
 `@microsoft/tui-test` and is kept for what only a terminal shows — where a widget lands, a
 hint below the editor, a dialog. Those run with `npm run test:tui`, outside `check` and CI
-until a run on the runner proves the native terminal engine works on its CPU. A test drives the pinned pi from `node_modules`, never the `pi` on PATH, with HOME and
+until a run on the runner proves the native terminal engine works on its CPU. A test drives
+the pinned pi from `node_modules`, never the `pi` on PATH, with HOME and
 `PI_CODING_AGENT_DIR` pointed at a temporary directory: the real `~/.pi` is neither read nor
 written. Set that HOME in the child's `env`, never by assignment in a shell script, where it
 leaks into every later line.
@@ -130,11 +131,10 @@ pi --no-extensions -e ./packages/<name>
 ## A package imports nothing from another package
 
 Every `packages/<name>/index.ts` is one fallow zone in `.fallowrc.json` and every such zone
-allows nothing,
-which is what turns "independent packages" from an intention into a check: importing
-`../pi-speak/index.ts` or `@shushanskii/pi-speak` from another package fails `npm run analyze`,
-and the file and the zone it crossed are named. Code that two packages both need becomes a
-package of its own, published the same way — not an import.
+allows nothing, which is what turns "independent packages" from an intention into a check:
+importing `../pi-speak/index.ts` or `@shushanskii/pi-speak` from another package fails
+`npm run analyze`, and the file and the zone it crossed are named. Code that two packages
+both need becomes a package of its own, published the same way — not an import.
 
 Tests are zones of their own. `tests/` allows nothing; `packages/<name>/test/` is the zone
 `pkg-<name>-test`, which may import `tests` and its own package and nothing else. The split is

@@ -20,36 +20,39 @@ import { TuiTest } from "@microsoft/tui-test";
 import type { Home } from "./home.ts";
 import { CLI, isolatedEnv, piArgs, ROOT } from "./pi.ts";
 
-export type Tui = {
-	term: TuiTest;
-	/**
-	 * Type a line and submit it. The Enter waits for the screen to settle first: typed straight
-	 * after `/name`, it lands while the slash-command autocomplete is open, which takes it as
-	 * "accept the completion" and leaves the line in the editor unsent.
-	 */
-	submit(line: string): Promise<void>;
-	/** The visible screen as lines, `home` and the repository replaced by <HOME> and <ROOT>. */
-	screen(): Promise<string[]>;
-	/** The lines between the transcript and the editor's top border: what a widget above it shows. */
-	aboveEditor(): Promise<string[]>;
-	close(): Promise<void>;
-};
-
 // Wide enough that a temp-dir path in a widget line does not wrap (macOS puts it under /var/folders).
 const COLS = 240;
 const ROWS = 40;
 /** The editor's borders are full-width rules of this character. */
 const RULE = "─".repeat(COLS);
 
+export interface Tui {
+	term: TuiTest;
+	/**
+	 * Type a line and submit it. The Enter waits for the screen to settle first: typed straight
+	 * after `/name`, it lands while the slash-command autocomplete is open, which takes it as
+	 * "accept the completion" and leaves the line in the editor unsent.
+	 */
+	submit: (line: string) => Promise<void>;
+	/** The visible screen as lines, `home` and the repository replaced by <HOME> and <ROOT>. */
+	screen: () => Promise<string[]>;
+	/** The lines between the transcript and the editor's top border: what a widget above it shows. */
+	aboveEditor: () => Promise<string[]>;
+	close: () => Promise<void>;
+}
+
 export async function startTui(name: string, home: Home, model?: string): Promise<Tui> {
 	const term = TuiTest.ephemeral(`pi-${name}`, {
 		trace: { mode: "on-failure", directory: ".tui-test/traces" },
 	});
+	// TERM is the terminal's own vocabulary, so it is set as a key rather than written as an identifier.
+	const env = isolatedEnv(home);
+	env.TERM = "xterm-256color";
 	await term.run(process.execPath, [CLI, ...piArgs(name, model)], {
 		cols: COLS,
 		rows: ROWS,
 		cwd: ROOT,
-		env: { PATH: process.env.PATH ?? "", TERM: "xterm-256color", ...isolatedEnv(home) },
+		env,
 	});
 	// pi lists what it loaded once it is ready for input.
 	await term.getByText("[Extensions]").expect({ timeout: 15_000 });
@@ -68,9 +71,13 @@ export async function startTui(name: string, home: Home, model?: string): Promis
 		async aboveEditor() {
 			const lines = await screen();
 			const top = lines.indexOf(RULE);
-			if (top < 0) throw new Error(`no editor border on screen:\n${lines.join("\n")}`);
+			if (top < 0) {
+				throw new Error(`no editor border on screen:\n${lines.join("\n")}`);
+			}
 			let start = top;
-			while (start > 0 && lines[start - 1] !== "") start--;
+			while (start > 0 && lines[start - 1] !== "") {
+				start -= 1;
+			}
 			return lines.slice(start, top);
 		},
 		close: () => term.closeQuiet(),

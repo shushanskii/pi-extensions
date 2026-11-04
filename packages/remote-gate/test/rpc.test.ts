@@ -22,10 +22,22 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
 import { type FakeServer, scriptedModels, startFakeServer } from "../../../tests/fake-server.ts";
 import { type Home, makeHome } from "../../../tests/home.ts";
+import type { PiEvent } from "../../../tests/pi.ts";
 import { type Pi, startPi } from "../../../tests/rpc.ts";
 
 /** What the model is told when the answer is no. */
 const DECLINED = "The user declined this command. Do not retry it or work around it;";
+
+/** How long a scripted turn may take. The calls of a turn run concurrently, so this is generous. */
+const TURN_WAIT_MS = 60_000;
+/** One call instead of fifteen. */
+const ONE_CALL_WAIT_MS = 30_000;
+/** A cold pi plus the turn it is given, generously. */
+const TEST_TIMEOUT_MS = 60_000;
+const MANY_CALLS_TIMEOUT_MS = 90_000;
+
+/** The gate's question, in the two parts a test compares. */
+const DIALOG_TITLE = /^⚠️\s+This command (?<why>.+):\n\n(?<command>[\s\S]+)\n\nRun it\?$/u;
 
 /** [command, the reason the gate gives] — a wrong regex changes one of these pairs. */
 const STOPPED: [string, string][] = [
@@ -75,6 +87,7 @@ afterEach(() => {
 	const pending = server.pending();
 	server.reset();
 	pi.ui.length = 0;
+	// biome-ignore lint/suspicious/noMisplacedAssertion: an afterEach guard is an assertion by design
 	expect(pending, "turns the script queued but pi never asked for").toBe(0);
 });
 
@@ -88,7 +101,7 @@ function answerAll(value: string) {
 async function runBash(commands: string[]) {
 	answerAll("No");
 	server.script({ tools: commands.map((command) => ({ tool: "bash", args: { command } })) }, { text: "done" });
-	return (await pi.client.promptAndWait("gate?", undefined, 60_000)) as any[];
+	return (await pi.client.promptAndWait("gate?", undefined, TURN_WAIT_MS)) as PiEvent[];
 }
 
 /** The questions the gate asked, as the command and the reason shown next to it. */
@@ -96,23 +109,30 @@ function asked(): { command: string; why: string }[] {
 	return pi.ui
 		.filter((r) => r.method === "select")
 		.map((r) => {
-			const shown = /^⚠️\s+This command (.+):\n\n([\s\S]+)\n\nRun it\?$/.exec(r.title ?? "");
+			const shown = DIALOG_TITLE.exec(r.title ?? "");
+			const parts = shown?.groups;
 			// A dialog this does not parse is not the gate's; saying so beats comparing undefined to a
 			// command, which a reader would have to decode from a diff of two objects.
-			if (!shown) throw new Error(`a dialog that is not the gate's: ${r.title}`);
-			return { why: shown[1], command: shown[2] };
+			if (!(parts?.why && parts.command)) {
+				throw new Error(`a dialog that is not the gate's: ${r.title}`);
+			}
+			return { why: parts.why, command: parts.command };
 		});
 }
 
 /** What each command got: the text the model saw, and whether pi marked it an error. */
-function results(events: any[]): Map<string, { text: string; isError: boolean }> {
+function results(events: PiEvent[]): Map<string, { text: string; isError: boolean }> {
 	const commands = new Map<string, string>();
 	const out = new Map<string, { text: string; isError: boolean }>();
 	for (const e of events) {
-		if (e.type === "tool_execution_start" && e.toolName === "bash") commands.set(e.toolCallId, e.args.command);
-		if (e.type === "tool_execution_end") {
+		if (e.type === "tool_execution_start" && e.toolName === "bash" && e.toolCallId && e.args?.command) {
+			commands.set(e.toolCallId, e.args.command);
+		}
+		if (e.type === "tool_execution_end" && e.toolCallId) {
 			const command = commands.get(e.toolCallId);
-			if (command) out.set(command, { text: e.result.content[0]?.text ?? "", isError: e.isError === true });
+			if (command) {
+				out.set(command, { text: e.result?.content?.[0]?.text ?? "", isError: e.isError === true });
+			}
 		}
 	}
 	return out;
@@ -120,44 +140,56 @@ function results(events: any[]): Map<string, { text: string; isError: boolean }>
 
 const key = ({ command, why }: { command: string; why: string }) => `${command}\t${why}`;
 
-test("asks for the changing commands with a reason, and does not ask for the reads", async () => {
-	const events = await runBash([...STOPPED.map(([command]) => command), ...READS]);
+test(
+	"asks for the changing commands with a reason, and does not ask for the reads",
+	async () => {
+		const events = await runBash([...STOPPED.map(([command]) => command), ...READS]);
 
-	expect(asked().map(key).sort(), "the gate asked about the wrong set of commands").toEqual(
-		STOPPED.map(([command, why]) => `${command}\t${why}`).sort(),
-	);
+		expect(asked().map(key).sort(), "the gate asked about the wrong set of commands").toEqual(
+			STOPPED.map(([command, why]) => `${command}\t${why}`).sort(),
+		);
 
-	const got = results(events);
-	for (const command of READS) {
-		expect(got.get(command)?.text, `${command} was stopped instead of run`).not.toContain(DECLINED);
-	}
-	for (const [command] of STOPPED) {
-		const result = got.get(command);
-		expect(result?.isError, `${command} reached the shell`).toBe(true);
+		const got = results(events);
+		for (const command of READS) {
+			expect(got.get(command)?.text, `${command} was stopped instead of run`).not.toContain(DECLINED);
+		}
+		for (const [command] of STOPPED) {
+			const result = got.get(command);
+			expect(result?.isError, `${command} reached the shell`).toBe(true);
+			expect(result?.text).toContain(DECLINED);
+		}
+	},
+	MANY_CALLS_TIMEOUT_MS,
+);
+
+test(
+	"yes runs the command the question was about",
+	async () => {
+		const command = "echo gate-approved && systemctl start gate-test";
+		answerAll("Yes, run it");
+		server.script({ tool: "bash", args: { command } }, { text: "done" });
+		const events = (await pi.client.promptAndWait("gate?", undefined, ONE_CALL_WAIT_MS)) as PiEvent[];
+
+		expect(asked()).toEqual([{ command, why: "changes the network or a service" }]);
+		// `systemctl` is not on this machine, so the command fails — what proves the yes is that it ran.
+		expect(results(events).get(command)?.text).toContain("gate-approved");
+	},
+	TEST_TIMEOUT_MS,
+);
+
+test(
+	"no keeps the command out of the shell",
+	async () => {
+		const command = "echo gate-declined && systemctl start gate-test";
+		const events = await runBash([command]);
+
+		const result = results(events).get(command);
+		expect(result?.isError).toBe(true);
+		expect(result?.text).not.toContain("gate-declined");
 		expect(result?.text).toContain(DECLINED);
-	}
-}, 90_000);
-
-test("yes runs the command the question was about", async () => {
-	const command = "echo gate-approved && systemctl start gate-test";
-	answerAll("Yes, run it");
-	server.script({ tool: "bash", args: { command } }, { text: "done" });
-	const events = (await pi.client.promptAndWait("gate?", undefined, 30_000)) as any[];
-
-	expect(asked()).toEqual([{ command, why: "changes the network or a service" }]);
-	// `systemctl` is not on this machine, so the command fails — what proves the yes is that it ran.
-	expect(results(events).get(command)?.text).toContain("gate-approved");
-}, 60_000);
-
-test("no keeps the command out of the shell", async () => {
-	const command = "echo gate-declined && systemctl start gate-test";
-	const events = await runBash([command]);
-
-	const result = results(events).get(command);
-	expect(result?.isError).toBe(true);
-	expect(result?.text).not.toContain("gate-declined");
-	expect(result?.text).toContain(DECLINED);
-}, 60_000);
+	},
+	TEST_TIMEOUT_MS,
+);
 
 /**
  * Known gap, kept executable: the exception meant to let a firewall read through is
@@ -166,8 +198,12 @@ test("no keeps the command out of the shell", async () => {
  * `test.fails` is a standing note: it turns red the moment the lookahead is fixed, and the fix is
  * to drop `.fails` in the same commit.
  */
-test.fails("iptables -L is a read too", async () => {
-	const events = await runBash(["iptables -L -n"]);
-	expect(asked()).toEqual([]);
-	expect(results(events).get("iptables -L -n")?.text).not.toContain(DECLINED);
-}, 60_000);
+test.fails(
+	"iptables -L is a read too",
+	async () => {
+		const events = await runBash(["iptables -L -n"]);
+		expect(asked()).toEqual([]);
+		expect(results(events).get("iptables -L -n")?.text).not.toContain(DECLINED);
+	},
+	TEST_TIMEOUT_MS,
+);

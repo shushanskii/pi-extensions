@@ -9,16 +9,35 @@
 
 import { spawn } from "node:child_process";
 import type { Home } from "./home.ts";
-import { CLI, isolatedEnv, piArgs, ROOT } from "./pi.ts";
+import { CLI, isolatedEnv, type PiEvent, piArgs, ROOT } from "./pi.ts";
 
-export type PrintRun = {
+/** One JSONL record, or nothing. pi's own docs warn against anything but LF framing and strict JSON. */
+function parse(line: string): PiEvent[] {
+	const trimmed = line.trim();
+	if (!trimmed) {
+		return [];
+	}
+	try {
+		const record: unknown = JSON.parse(trimmed);
+		// Checked as far as this type claims: an object with a string `type`. A stray diagnostic on
+		// stdout is dropped here rather than becoming an event a test then asserts on.
+		if (typeof record === "object" && record !== null && typeof (record as PiEvent).type === "string") {
+			return [record as PiEvent];
+		}
+		return [];
+	} catch {
+		return [];
+	}
+}
+
+export interface PrintRun {
 	/** Every record after the session header, in order. */
-	events: any[];
+	events: PiEvent[];
 	/** pi writes diagnostics and errors here, so a failed run is readable without a re-run. */
 	stderr: string;
 	/** The exit code. */
 	code: number | null;
-};
+}
 
 /** Run one prompt through pi's JSON mode, from a cold process to its exit. */
 export async function runPi(
@@ -32,10 +51,10 @@ export async function runPi(
 		cwd: ROOT,
 		// "ignore", not "pipe": pi would otherwise sit reading a stdin that this driver never writes.
 		stdio: ["ignore", "pipe", "pipe"],
-		env: { PATH: process.env.PATH ?? "", ...isolatedEnv(home) },
+		env: isolatedEnv(home),
 	});
 
-	const events: any[] = [];
+	const events: PiEvent[] = [];
 	let stdout = "";
 	let stderr = "";
 	child.stdout.setEncoding("utf8");
@@ -46,7 +65,9 @@ export async function runPi(
 		// the tail, which is a record still being written.
 		const complete = stdout.split("\n");
 		stdout = complete.pop() ?? "";
-		for (const line of complete) events.push(...parse(line));
+		for (const line of complete) {
+			events.push(...parse(line));
+		}
 	});
 	child.stderr.on("data", (chunk: string) => {
 		stderr += chunk;
@@ -57,23 +78,12 @@ export async function runPi(
 			child.kill("SIGKILL");
 			reject(new Error(`pi --mode json did not exit in ${timeoutMs}ms. Stdout: ${stdout}\nStderr: ${stderr}`));
 		}, timeoutMs);
-		child.once("exit", (code) => {
+		child.once("exit", (status) => {
 			clearTimeout(timer);
-			resolve(code);
+			resolve(status);
 		});
 	});
 
 	events.push(...parse(stdout.trim()));
 	return { events: events.filter((e) => e.type !== "session"), stderr, code };
-}
-
-/** One JSONL record, or nothing. pi's own docs warn against anything but LF framing and strict JSON. */
-function parse(line: string): any[] {
-	const trimmed = line.trim();
-	if (!trimmed) return [];
-	try {
-		return [JSON.parse(trimmed)];
-	} catch {
-		return [];
-	}
 }
