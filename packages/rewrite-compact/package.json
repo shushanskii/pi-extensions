@@ -1,7 +1,11 @@
 {
-	"name": "@developer/rewrite-compact",
+	"name": "@shushanskii/rewrite-compact",
 	"version": "1.0.2",
 	"description": "a compaction summary that is rewritten, not appended to",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
 	"keywords": [
 		"pi-package"
 	],
@@ -21,6 +25,6 @@
 		"typebox": "*"
 	},
 	"publishConfig": {
-		"registry": "https://git.rezolver-zero.com/api/packages/developer/npm/"
+		"registry": "https://npm.pkg.github.com/"
 	}
 }

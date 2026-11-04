@@ -1,7 +1,11 @@
 {
-	"name": "@developer/read-window",
+	"name": "@shushanskii/read-window",
 	"version": "1.0.2",
 	"description": "blocks a read of a large file when no window was asked for, and names the commands that would find the lines",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
 	"keywords": [
 		"pi-package"
 	],
@@ -21,6 +25,6 @@
 		"typebox": "*"
 	},
 	"publishConfig": {
-		"registry": "https://git.rezolver-zero.com/api/packages/developer/npm/"
+		"registry": "https://npm.pkg.github.com/"
 	}
 }

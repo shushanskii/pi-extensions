@@ -1,7 +1,11 @@
 {
-	"name": "@developer/pi-web",
+	"name": "@shushanskii/pi-web",
 	"version": "1.0.2",
 	"description": "the lab's Crawl4AI as the tools the model reaches for without thinking",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
 	"keywords": [
 		"pi-package"
 	],
@@ -22,6 +26,6 @@
 		"typebox": "*"
 	},
 	"publishConfig": {
-		"registry": "https://git.rezolver-zero.com/api/packages/developer/npm/"
+		"registry": "https://npm.pkg.github.com/"
 	}
 }

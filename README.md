@@ -1,11 +1,11 @@
 # pi-extensions
 
-The lab's own pi extensions, one npm package each, published to the forge's npm
-registry so that every one is installed and removed on its own:
+The lab's own pi extensions, one npm package each, published to GitHub Packages
+so that every one is installed and removed on its own:
 
 ```bash
-pi install npm:@developer/pi-web
-pi remove  npm:@developer/pi-web
+pi install npm:@shushanskii/pi-web
+pi remove  npm:@shushanskii/pi-web
 pi update  --extensions          # moves every unpinned package to its latest version
 ```
 
@@ -33,17 +33,20 @@ terms stay searchable.
 
 ## Setting up a machine
 
-npm needs to know where the `@developer` scope lives, and — unless the `developer`
-account is public — a token that may read its packages: _Settings → Applications_,
-scope `read:package`. pi installs with npm, and npm reads `~/.npmrc`:
+The packages are private, so npm needs the scope's registry and a token allowed to
+read it. This registry accepts a personal access token **classic** carrying the
+`read:packages` scope and refuses a fine-grained token outright, even one that looks
+granted — so mint a classic one under _Settings → Developer settings → Personal access
+tokens → Tokens (classic)_, ticking no scope but that, and put it in `~/.npmrc`. pi
+installs with npm, and npm reads that file:
 
 ```ini
-@developer:registry=https://git.rezolver-zero.com/api/packages/developer/npm/
-//git.rezolver-zero.com/api/packages/developer/npm/:_authToken=<read:package token>
+@shushanskii:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=<classic token, read:packages>
 ```
 
-Then `pi install npm:@developer/<name>` for each package wanted, and
-`pi install -l npm:@developer/read-window` inside `gw-router`. A project package
+Then `pi install npm:@shushanskii/<name>` for each package wanted, and
+`pi install -l npm:@shushanskii/read-window` inside `gw-router`. A project package
 loads only after pi has been told the project is trusted.
 
 ## Changing a package
@@ -57,11 +60,12 @@ loads only after pi has been told the project is trusted.
 3. Bump `version` in `packages/<name>/package.json`, commit, and tag
    `<name>@<version>` (`git tag pi-web@1.1.0`). Pushing the tag runs the same check and
    publishes that one package; a tag whose version differs from the manifest fails.
-4. `pi update npm:@developer/<name>` on each machine.
+4. `pi update npm:@shushanskii/<name>` on each machine.
 
-Publishing needs the secret `REGISTRY_TOKEN` (scope `write:package`) on this
-repository or its owner — the same token `srv02/k3s` pushes images with. A version
-cannot be published twice: the registry refuses it, so a fix is always a new version.
+Publishing needs no secret of its own: `GITHUB_TOKEN` may write packages belonging to
+the repository whose workflow runs, and the `repository` field of each manifest is what
+links a package to this repository so that write is granted. A version cannot be
+published twice: the registry refuses it, so a fix is always a new version.
 
 When pi itself moves to a new release, raise the pinned versions in the root
 `package.json` and run the check before anything else.

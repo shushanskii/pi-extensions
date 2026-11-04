@@ -1,7 +1,11 @@
 {
-	"name": "@developer/remote-gate",
+	"name": "@shushanskii/remote-gate",
 	"version": "1.0.2",
 	"description": "ask before a bash call changes a remote host or the network",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
 	"keywords": [
 		"pi-package"
 	],
@@ -21,6 +25,6 @@
 		"typebox": "*"
 	},
 	"publishConfig": {
-		"registry": "https://git.rezolver-zero.com/api/packages/developer/npm/"
+		"registry": "https://npm.pkg.github.com/"
 	}
 }

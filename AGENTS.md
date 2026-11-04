@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Repo for pi extensions: one npm package each, published to the forge's npm registry.
+Repo for pi extensions: one npm package each, published to GitHub Packages.
 [`README.md`](./README.md) is the map; the header comment of each `packages/<name>/index.ts`
 carries its design, its measurements and its failure modes, and is the thing to read
 before touching that package.
@@ -31,33 +31,21 @@ before touching that package.
    read in. Russian belongs to the chat and to session notes, never to a file here.
 
 4. **`main` is protected — only a merged pull request changes it.** Direct pushes are refused
-   by the server, not by convention — measured with the account this machine pushes with:
-   pushing to `main` ends in
-   `Forgejo: Not allowed to push to protected branch main` and `pre-receive hook declined`.
-   Work happens on the branch and arrives by pull request; merging is an action of its own,
-   so it needs its own approval under rule 2.
+   by the server, not by convention, and a merge waits for a green `check` job. Work happens
+   on the branch and arrives by pull request; merging is an action of its own, so it needs its
+   own approval under rule 2.
 
    **Opening a pull request is the user's click; the agent's part ends with a link and a
-   description.** After the push, hand over the compare URL the push itself prints, plus the
-   text to paste — the title is one line about what changes, the body is the reason, which is
-   already written in the commit message:
+   description.** After the push, hand over the compare URL, plus the text to paste — the
+   title is one line about what changes, the body is the reason, which is already written in
+   the commit message:
 
    ```text
-   https://git.rezolver-zero.com/developer/pi-extensions/compare/main...<branch>
+   https://github.com/shushanskii/pi-extensions/compare/main...<branch>
    ```
 
-   Do not spend a push rediscovering the two ways that do not work here. Forgejo 14.0.5
-   ignores `merge_request.create` — bare and `=true` alike, a push of a new branch answers
-   with nothing but that compare URL — and the tokens held here are scoped to packages, so
-   the API refuses even a read:
-
-   ```text
-   token does not have at least one of required scope(s): [read:repository]
-   ```
-
-   `POST /repos/developer/pi-extensions/pulls` does work, given a token scoped for the
-   repository (_Settings → Applications_, not the one `~/.npmrc` uses for packages); ask for
-   one rather than assuming it is there.
+   `gh` is installed here and its token could open the pull request with `gh pr create`, so
+   leaving the click to the user is a policy, not a missing permission.
 
 5. **`AGENTS.md` is edited by the owner.** An agent never adds to or tidies this file on its
    own, not even when a merge has made a paragraph wrong: it shows the diff and names the
@@ -112,7 +100,7 @@ pi --no-extensions -e ./packages/<name>
 
 Every `packages/<name>` is one fallow zone in `.fallowrc.json` and every zone allows nothing,
 which is what turns "independent packages" from an intention into a check: importing
-`../pi-speak/index.ts` or `@developer/pi-speak` from another package fails `npm run analyze`,
+`../pi-speak/index.ts` or `@shushanskii/pi-speak` from another package fails `npm run analyze`,
 and the file and the zone it crossed are named. Code that two packages both need becomes a
 package of its own, published the same way — not an import.
 
@@ -159,12 +147,15 @@ When pi itself moves, raise the pinned versions in the root `package.json` and r
 
 ## A new package looks like the other six
 
-Copy a neighbouring `package.json` rather than writing one: `@developer/<name>`, the
+Copy a neighbouring `package.json` rather than writing one: `@shushanskii/<name>`, the
 `pi-package` keyword, `license: UNLICENSED`, a `files` list naming exactly `index.ts`,
 `README.md` and the config example, `pi.extensions: ["./index.ts"]`, the three
 `peerDependencies` at `"*"` (the packages come from the pi that loads this one, so nothing
-here may install a second copy), and `publishConfig.registry`. `tsconfig.json` picks the
-directory up by glob; the root `package.json` needs nothing.
+here may install a second copy), `publishConfig.registry` pointing at GitHub Packages, and
+the `repository` field naming this repository, which is how the registry links a published
+package to it and inherits its permissions. The scope is part of the same constraint: this
+registry routes a package by its scope, so only `@shushanskii` can be published from here.
+`tsconfig.json` picks the directory up by glob; the root `package.json` needs nothing.
 
 `README.md` stays a shop window — what it is, install and remove, a pointer to the config
 example. The command named after the package (`/web`, `/image`, `/speak`, `/suggest`) is

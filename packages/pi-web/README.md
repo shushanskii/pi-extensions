@@ -3,8 +3,8 @@
 The lab's Crawl4AI as the tools the model reaches for without thinking.
 
 ```bash
-pi install npm:@developer/pi-web
-pi remove npm:@developer/pi-web
+pi install npm:@shushanskii/pi-web
+pi remove npm:@shushanskii/pi-web
 ```
 
 Config: `~/.pi/agent/web.json`, every key optional — the defaults are the working values. Shape: [`web.json.example`](./web.json.example).

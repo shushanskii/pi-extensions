@@ -1,7 +1,11 @@
 {
-	"name": "@developer/pi-image",
+	"name": "@shushanskii/pi-image",
 	"version": "1.0.3",
 	"description": "the lab's qwen-image as a tool the model can call",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
 	"keywords": [
 		"pi-package"
 	],
@@ -22,6 +26,6 @@
 		"typebox": "*"
 	},
 	"publishConfig": {
-		"registry": "https://git.rezolver-zero.com/api/packages/developer/npm/"
+		"registry": "https://npm.pkg.github.com/"
 	}
 }

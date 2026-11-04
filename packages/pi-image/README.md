@@ -3,8 +3,8 @@
 The lab's qwen-image as a tool the model can call.
 
 ```bash
-pi install npm:@developer/pi-image
-pi remove npm:@developer/pi-image
+pi install npm:@shushanskii/pi-image
+pi remove npm:@shushanskii/pi-image
 ```
 
 Config: `~/.pi/agent/image.json`, every key optional — the defaults are the working values. Shape: [`image.json.example`](./image.json.example).
