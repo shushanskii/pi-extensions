@@ -3,7 +3,7 @@
  *
  * The ears were already there (pi-voice-stt → the whisper on llm.rezolver-zero.com);
  * this is the mouth: POST /v1/audio/speech to the piper in the same container, which
- * srv02/llm/deploy.sh installs and llama-swap routes. One domain, one auth, one
+ * the LLM host's deploy script installs and llama-swap routes. One domain, one auth, one
  * certificate for both directions.
  *
  * Why a summary and not the answer: a forty-line answer is three minutes of speech,

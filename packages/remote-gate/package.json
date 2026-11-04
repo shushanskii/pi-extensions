@@ -1,6 +1,6 @@
 {
 	"name": "@shushanskii/remote-gate",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"description": "ask before a bash call changes a remote host or the network",
 	"repository": {
 		"type": "git",

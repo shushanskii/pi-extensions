@@ -5,8 +5,8 @@
  * two commands that would have found the right lines instead.
  *
  * Why enforcement and not another sentence in AGENTS.md: the unit of reading in
- * this repository is a file, and the files are not small — srv02/llm/
- * deploy.sh is ~20k tokens, the tree ~150k. One unbounded read is a tenth of a
+ * this repository is a file, and the files are not small — the LLM host's
+ * deploy script is ~20k tokens, the tree ~150k. One unbounded read is a tenth of a
  * window spent before the first tool result, and the cost is not the invoice:
  * a model reasons worse over a window padded with code that turned out not to
  * matter. The rule reads well and gets ignored under load, which is exactly

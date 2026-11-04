@@ -1,6 +1,6 @@
 {
 	"name": "@shushanskii/read-window",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"description": "blocks a read of a large file when no window was asked for, and names the commands that would find the lines",
 	"repository": {
 		"type": "git",

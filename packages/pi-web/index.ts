@@ -22,7 +22,7 @@
  *   open and an artifact id behind a token is not.
  *
  * Why /md falls back. A content filter answers an empty page with `success: true`
- * (srv02/services/README.md, Gotchas): bm25 with a query nothing matches, or fit on a
+ * (the fetch service's README, Gotchas): bm25 with a query nothing matches, or fit on a
  * page Readability cannot shape. An empty answer is retried down bm25 → fit → raw
  * before it is reported as empty, and the filter that produced the text is named.
  *
@@ -30,7 +30,7 @@
  * fifth way, not a replacement. pi-searxng's `fetch_content` is removed from the
  * active set on every session start. The fetcher's own MCP tools (`fetch_*`) are
  * removed too: everything they did that works is here, and `fetch_execute_js` never
- * worked — the server keeps that endpoint off on purpose (srv02/fetch/README.md) and
+ * worked — the server keeps that endpoint off on purpose (the fetch service's README) and
  * answers 403. Their adapter entry is gone from mcp-adapter.json; the names stay in
  * the list so that re-adding it does not bring back a second way. Bash stays; the
  * guidelines say what curl is still for.
@@ -52,7 +52,7 @@ import { Type } from "typebox";
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "web.json");
 
 interface Config {
-	/** Origin of the Crawl4AI HTTP API. The LAN address skips the gateway: http://192.168.100.31:11235 */
+	/** Origin of the Crawl4AI HTTP API. A LAN address instead of the domain skips the gateway. */
 	endpoint: string;
 	/** File holding the bearer token, 0600. The name predates this extension: the MCP adapter read it first. */
 	tokenFile: string;

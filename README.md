@@ -17,7 +17,7 @@ pi update  --extensions          # moves every unpinned package to its latest ve
 | [`next-prompt`](packages/next-prompt)         | the next message guessed as grey ghost text; `/suggest`                                                 | `next-prompt.json` | global                    |
 | [`rewrite-compact`](packages/rewrite-compact) | a compaction summary rewritten, not appended to                                                         | —                  | global                    |
 | [`remote-gate`](packages/remote-gate)         | a yes/no before a bash call changes a remote host or the network                                        | —                  | global, **not installed** |
-| [`read-window`](packages/read-window)         | refuses an unbounded `read` of a large file                                                             | —                  | project: `gw-router`      |
+| [`read-window`](packages/read-window)         | refuses an unbounded `read` of a large file                                                             | —                  | project: the gateway repo |
 
 Configs live in `~/.pi/agent/`, every key is optional, and each package carries a
 `*.example` of its shape. Secrets stay in the config or in a file it names, never in
@@ -46,7 +46,7 @@ installs with npm, and npm reads that file:
 ```
 
 Then `pi install npm:@shushanskii/<name>` for each package wanted, and
-`pi install -l npm:@shushanskii/read-window` inside `gw-router`. A project package
+`pi install -l npm:@shushanskii/read-window` inside the gateway repository. A project package
 loads only after pi has been told the project is trusted.
 
 ## Changing a package
