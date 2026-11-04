@@ -28,6 +28,12 @@
 # the check, and only when VERSION is what that package.json says, so a tag cannot publish a
 # version the manifest does not carry.
 #
+# Tags go up one push at a time. GitHub creates no push event when more than three tags are
+# created at once, so a batch of seven publishes nothing and says nothing: measured
+# 2026-11-04, seven tags in one push left all seven on the repository and started zero runs.
+# A tag that is already there is published with `gh workflow run ci.yml --ref
+# refs/tags/<name>@<version>`, which is what the seven of 2026-11-04 went out on.
+#
 # Publishing needs no secret of its own. GITHUB_TOKEN may publish packages belonging to the
 # repository the workflow runs in, and a package whose `repository` field names this
 # repository inherits its permissions, which is what grants that token the write. Two
@@ -59,7 +65,9 @@ jobs:
     runs-on: ubuntu-latest
     container: { image: node:22 }
     steps:
-      - uses: actions/checkout@v4
+      # v4 still declares node20, which a current runner only runs by forcing it onto node24;
+      # v7 declares node24 outright.
+      - uses: actions/checkout@v7
       - run: npm ci --no-audit --no-fund
       # Reports, never fails: every line ends in `|| true`. A native binary dying by signal is
       # only diagnosable with these facts, and `--version` here separates "crashes on startup"
@@ -94,7 +102,7 @@ jobs:
     # Alpine here is fine: this job only runs npm publish, and no native binary is involved.
     container: { image: node:22-alpine }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: publish the package the tag names
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
