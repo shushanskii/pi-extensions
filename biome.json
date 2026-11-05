@@ -7,7 +7,14 @@
 	},
 	"files": {
 		"ignoreUnknown": true,
-		"includes": ["**", "!**/package-lock.json", "!**/docs"]
+		"includes": [
+			"**",
+			"!**/package-lock.json",
+			"!**/docs",
+			"!packages/pi-navigator/*.ts",
+			"!packages/pi-navigator/test",
+			"!packages/pi-navigator/README.md"
+		]
 	},
 	"formatter": {
 		"indentStyle": "tab",

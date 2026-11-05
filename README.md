@@ -9,15 +9,22 @@ pi remove  npm:@shushanskii/pi-web
 pi update  --extensions          # moves every unpinned package to its latest version
 ```
 
-| Package                                       | What it does                                                                                            | Config             | Scope                     |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------ | ------------------------- |
-| [`pi-web`](packages/pi-web)                   | Crawl4AI as `web_peek`, `web_read`, `web_screenshot`, `web_pdf`; `/web` shows what the model is offered | `web.json`         | global                    |
-| [`pi-image`](packages/pi-image)               | qwen-image as `generate_image`; `/image test`                                                           | `image.json`       | global                    |
-| [`pi-speak`](packages/pi-speak)               | one spoken Russian sentence at the end of a turn, through piper; `/speak`                               | `tts.json`         | global                    |
-| [`next-prompt`](packages/next-prompt)         | the next message guessed as grey ghost text; `/suggest`                                                 | `next-prompt.json` | global                    |
-| [`rewrite-compact`](packages/rewrite-compact) | a compaction summary rewritten, not appended to                                                         | —                  | global                    |
-| [`remote-gate`](packages/remote-gate)         | a yes/no before a bash call changes a remote host or the network                                        | —                  | global, **not installed** |
-| [`read-window`](packages/read-window)         | refuses an unbounded `read` of a large file                                                             | —                  | project: the gateway repo |
+| Package                                       | What it does                                                                                            | Config              | Scope                     |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------- | ------------------------- |
+| [`pi-web`](packages/pi-web)                   | Crawl4AI as `web_peek`, `web_read`, `web_screenshot`, `web_pdf`; `/web` shows what the model is offered | `web.json`          | global                    |
+| [`pi-image`](packages/pi-image)               | qwen-image as `generate_image`; `/image test`                                                           | `image.json`        | global                    |
+| [`pi-speak`](packages/pi-speak)               | one spoken Russian sentence at the end of a turn, through piper; `/speak`                               | `tts.json`          | global                    |
+| [`next-prompt`](packages/next-prompt)         | the next message guessed as grey ghost text; `/suggest`                                                 | `next-prompt.json`  | global                    |
+| [`rewrite-compact`](packages/rewrite-compact) | a compaction summary rewritten, not appended to                                                         | —                   | global                    |
+| [`remote-gate`](packages/remote-gate)         | a yes/no before a bash call changes a remote host or the network                                        | —                   | global, **not installed** |
+| [`read-window`](packages/read-window)         | refuses an unbounded `read` of a large file                                                             | —                   | project: the gateway repo |
+| [`pi-navigator`](packages/pi-navigator)       | file tree, git panel and viewer in one overlay; `/navigator`, `navigator_show`                          | `pi-navigator.json` | global                    |
+
+`pi-navigator` is a fork of <https://github.com/lordekeen/pi-navigator> kept under its
+upstream MIT license, so it is the one package that is not written here: it keeps
+upstream's formatting (Biome skips its sources), type-checks under its own `tsconfig.json`
+through `npm run typecheck:navigator`, and is updated by copying upstream over it rather
+than by editing. Its header comment says what is ours and what to re-apply.
 
 Configs live in `~/.pi/agent/`, every key is optional, and each package carries a
 `*.example` of its shape. Secrets stay in the config or in a file it names, never in

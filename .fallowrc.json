@@ -1,11 +1,13 @@
 {
 	"$schema": "./node_modules/fallow/schema.json",
+	"ignoreFindings": ["packages/pi-navigator/**"],
 	"boundaries": {
 		"zones": [
 			{ "name": "tests", "patterns": ["tests/**", "vitest.config.mts"] },
 			{ "name": "pkg-next-prompt", "patterns": ["packages/next-prompt/index.ts"] },
 			{ "name": "pkg-pi-image", "patterns": ["packages/pi-image/index.ts"] },
 			{ "name": "pkg-pi-image-test", "patterns": ["packages/pi-image/test/**"] },
+			{ "name": "pkg-pi-navigator", "patterns": ["packages/pi-navigator/**"] },
 			{ "name": "pkg-pi-speak", "patterns": ["packages/pi-speak/index.ts"] },
 			{ "name": "pkg-pi-web", "patterns": ["packages/pi-web/index.ts"] },
 			{ "name": "pkg-read-window", "patterns": ["packages/read-window/index.ts"] },
@@ -18,6 +20,7 @@
 			{ "from": "pkg-next-prompt", "allow": [] },
 			{ "from": "pkg-pi-image", "allow": [] },
 			{ "from": "pkg-pi-image-test", "allow": ["tests", "pkg-pi-image"] },
+			{ "from": "pkg-pi-navigator", "allow": [] },
 			{ "from": "pkg-pi-speak", "allow": [] },
 			{ "from": "pkg-pi-web", "allow": [] },
 			{ "from": "pkg-read-window", "allow": [] },

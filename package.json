@@ -4,9 +4,9 @@
 	"description": "The lab's pi extensions, one npm package each, published to GitHub Packages",
 	"scripts": {
 		"check": "npm run typecheck && npm run lint && npm run analyze && npm test",
-		"test": "vitest run --project rpc",
+		"test": "vitest run --project rpc --project unit",
 		"test:tui": "vitest run --project tui",
-		"typecheck": "tsc -p .",
+		"typecheck": "tsc -p . && tsc -p packages/pi-navigator",
 		"lint": "biome check --error-on-warnings --max-diagnostics=none .",
 		"fix": "biome check --write .",
 		"analyze": "fallow architecture --fail-on-issues && fallow dead-code --fail-on-issues",

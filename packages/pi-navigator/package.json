@@ -1,0 +1,77 @@
+{
+	"name": "@shushanskii/pi-navigator",
+	"version": "0.18.4-lab.1",
+	"description": "Read-only project file navigator overlay for pi: file tree, git state, and syntax-highlighted viewing without leaving the session.",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi",
+		"coding-agent",
+		"navigator",
+		"file-tree",
+		"file-viewer",
+		"git",
+		"tui",
+		"terminal-ui",
+		"overlay"
+	],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
+	"publishConfig": {
+		"registry": "https://npm.pkg.github.com/",
+		"access": "public"
+	},
+	"type": "module",
+	"files": [
+		"ansi.ts",
+		"bytes.ts",
+		"chafa.ts",
+		"constants.ts",
+		"diff.ts",
+		"env.ts",
+		"files_view.ts",
+		"frame.ts",
+		"git.ts",
+		"git_view.ts",
+		"help.ts",
+		"help_view.ts",
+		"icons.ts",
+		"image_pipeline.ts",
+		"images.ts",
+		"index.ts",
+		"layout.ts",
+		"minimap_view.ts",
+		"native_image.ts",
+		"navigator.ts",
+		"open_target.ts",
+		"session.ts",
+		"settings.ts",
+		"settings_menu.ts",
+		"theme.ts",
+		"tree.ts",
+		"types.ts",
+		"viewer.ts",
+		"viewer_model.ts",
+		"viewer_view.ts",
+		"assets/",
+		"LICENSE",
+		"README.md"
+	],
+	"pi": {
+		"image": "https://raw.githubusercontent.com/lordekeen/pi-navigator/main/assets/files-git-viewer.png",
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
+	},
+	"engines": {
+		"node": ">=22"
+	}
+}
