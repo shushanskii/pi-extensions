@@ -38,17 +38,19 @@ export interface Tui {
 	screen: () => Promise<string[]>;
 	/** The lines between the transcript and the editor's top border: what a widget above it shows. */
 	aboveEditor: () => Promise<string[]>;
+	/** The editor's first content line — where ghost text and a prompt glyph have to share a row. */
+	editorLine: () => Promise<string>;
 	close: () => Promise<void>;
 }
 
-export async function startTui(name: string, home: Home, model?: string): Promise<Tui> {
+export async function startTui(name: string, home: Home, model?: string, extra?: string[]): Promise<Tui> {
 	const term = TuiTest.ephemeral(`pi-${name}`, {
 		trace: { mode: "on-failure", directory: ".tui-test/traces" },
 	});
 	// TERM is the terminal's own vocabulary, so it is set as a key rather than written as an identifier.
 	const env = isolatedEnv(home);
 	env.TERM = "xterm-256color";
-	await term.run(process.execPath, [CLI, ...piArgs(name, model)], {
+	await term.run(process.execPath, [CLI, ...piArgs(name, model, extra)], {
 		cols: COLS,
 		rows: ROWS,
 		cwd: ROOT,
@@ -79,6 +81,23 @@ export async function startTui(name: string, home: Home, model?: string): Promis
 				start -= 1;
 			}
 			return lines.slice(start, top);
+		},
+		async editorLine() {
+			const lines = await screen();
+			// The row above the editor's bottom border. The last rule, not the first: pi 1.5.0 draws
+			// a bordered row of its own directly above the editor, so the first rule on screen is not
+			// the editor's top border. One box or two, the content sits under the closing one.
+			let bottom = -1;
+			for (let i = lines.length - 1; i >= 0; i -= 1) {
+				if (lines[i] === RULE) {
+					bottom = i;
+					break;
+				}
+			}
+			if (bottom < 1) {
+				throw new Error(`no editor border on screen:\n${lines.join("\n")}`);
+			}
+			return lines[bottom - 1] ?? "";
 		},
 		close: () => term.closeQuiet(),
 	};

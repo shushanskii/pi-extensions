@@ -51,10 +51,14 @@ export interface PiEvent {
 /**
  * pi's arguments for `packages/<name>` as the only extension. `model` picks one from the
  * provider `scriptedModels` writes; without it pi starts with no model, which is enough for
- * commands and not for a prompt.
+ * commands and not for a prompt. `extra` loads further extension paths after it, in the order
+ * given — what a test needs when the thing under test is how two extensions meet.
  */
-export function piArgs(name: string, model?: string): string[] {
+export function piArgs(name: string, model?: string, extra?: string[]): string[] {
 	const args = ["--no-session", "--no-extensions", "-e", `./packages/${name}`];
+	for (const path of extra ?? []) {
+		args.push("-e", path);
+	}
 	if (model) {
 		args.push("--provider", SCRIPTED_PROVIDER, "--model", model);
 	}

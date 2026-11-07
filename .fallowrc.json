@@ -4,6 +4,7 @@
 		"zones": [
 			{ "name": "tests", "patterns": ["tests/**", "vitest.config.mts"] },
 			{ "name": "pkg-next-prompt", "patterns": ["packages/next-prompt/index.ts"] },
+			{ "name": "pkg-next-prompt-test", "patterns": ["packages/next-prompt/test/**"] },
 			{ "name": "pkg-pi-image", "patterns": ["packages/pi-image/index.ts"] },
 			{ "name": "pkg-pi-image-test", "patterns": ["packages/pi-image/test/**"] },
 			{ "name": "pkg-pi-speak", "patterns": ["packages/pi-speak/index.ts"] },
@@ -16,6 +17,7 @@
 		"rules": [
 			{ "from": "tests", "allow": [] },
 			{ "from": "pkg-next-prompt", "allow": [] },
+			{ "from": "pkg-next-prompt-test", "allow": ["tests", "pkg-next-prompt"] },
 			{ "from": "pkg-pi-image", "allow": [] },
 			{ "from": "pkg-pi-image-test", "allow": ["tests", "pkg-pi-image"] },
 			{ "from": "pkg-pi-speak", "allow": [] },
