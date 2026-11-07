@@ -15,10 +15,19 @@
  * next turn waits. One or two thousand tokens cost about a second, and Strata does not
  * park a request that short, so the session's own cache entry stays where it was.
  *
- * How the grey text is drawn: a subclass of pi's CustomEditor that replaces only the
- * empty content line in render() and leaves everything else — borders, autocomplete, app
- * keys — to the parent. It is installed once with setEditorComponent; another extension
- * that installs its own editor would replace it, and then only the hint line remains.
+ * How the grey text is drawn: not by a subclass of CustomEditor. pi's editor slot holds one
+ * factory and `setEditorComponent` replaces what was in it, so a subclass of the editor would
+ * evict every other editor extension and be evicted by whichever of them loaded later — and
+ * the eviction is silent: the hint widget below the editor is set through a different API, so
+ * it keeps appearing while the text it describes never lands. Measured on the lab machine with
+ * pi-cc-extensions and pi-voice-stt both installed: pi-cc-extensions replaces the slot at
+ * session_start, pi-voice-stt wraps the factory it finds, and next-prompt loaded first lost.
+ *
+ * So this file wraps instead of subclassing: it calls the factory already in the slot, takes the
+ * editor that comes back, and replaces only that instance's `render`. The inner editor keeps its
+ * keys, its autocomplete and its own drawing, and the ghost is spliced into the line it produced
+ * rather than written over it — which matters because another extension's prompt glyph sits at
+ * the start of that same line.
  *
  * No Alt shortcut on purpose: on macOS Option is not Meta unless the terminal is told so,
  * and alt+s arrived as "ß" — a key the listener rightly took for typing.
@@ -29,13 +38,8 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-	CustomEditor,
-	type ExtensionAPI,
-	type ExtensionContext,
-	type KeybindingsManager,
-} from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, type EditorTheme, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CURSOR_MARKER, type TUI, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 interface Config {
 	enabled: boolean;
@@ -66,12 +70,21 @@ const CONFIG_PATH = join(process.env.HOME ?? "", ".pi", "agent", "next-prompt.js
 const MAX_SUGGESTION = 240;
 // The guess is not creative work; a little randomness only makes it wander.
 const GUESS_TEMPERATURE = 0.3;
-// Editor padding sits on both sides, so usable width is width - pad * PADDING_SIDES.
-const PADDING_SIDES = 2;
 // An empty editor is three rendered lines: top border, content, bottom border. Fewer than
 // that is not the editor this file knows, so the ghost stays off; more is the same frame
 // with autocomplete appended below it, so the content line stays the middle one.
 const EDITOR_FRAME_LINES = 3;
+const CONTENT_LINE = 1;
+// What is left of an empty content line once its fill is removed: padding, and another
+// extension's prompt glyph if it drew one.
+const TRAILING_SPACES = / +$/u;
+
+// pi's own alias, widened: the setter takes `EditorFactory | undefined` to mean "clear the slot",
+// and this file needs the callable half of that union.
+type EditorFactory = NonNullable<Parameters<ExtensionContext["ui"]["setEditorComponent"]>[0]>;
+// What to build when the slot was empty: pi's own editor, so this extension still draws over
+// something that behaves like the editor the user left.
+const plainEditor: EditorFactory = (terminal, theme, keybindings) => new CustomEditor(terminal, theme, keybindings);
 
 // What the model sometimes puts in front of the line it was asked for.
 const LEAD_IN = /^(?:next message|user|пользователь|следующий запрос)\s*[:：-]\s*/iu;
@@ -183,30 +196,65 @@ export default function (pi: ExtensionAPI) {
 	let generation = 0;
 	let unlisten: (() => void) | undefined;
 	let tui: TUI | undefined;
+	// This extension's factory, and whether it is what we last wrote into the slot. The flag is
+	// separate from the factory because both are undefined before the first install, and comparing
+	// the two would read an empty slot as "already ours" and never fill it.
+	let ghostFactory: EditorFactory | undefined;
+	let installed = false;
 
-	class GhostEditor extends CustomEditor {
-		constructor(t: TUI, theme: EditorTheme, keybindings: KeybindingsManager) {
-			super(t, theme, keybindings);
-			tui = t;
-		}
-
-		render(width: number): string[] {
-			const lines = super.render(width);
-			// Only an empty, single-line editor gets the ghost: top border, one content line,
-			// bottom border, then whatever autocomplete appends.
-			if (!ghost || this.getText() !== "" || lines.length < EDITOR_FRAME_LINES) {
-				return lines;
-			}
-			const pad = Math.min(this.getPaddingX(), Math.floor(width / PADDING_SIDES));
-			const room = Math.max(1, width - pad * PADDING_SIDES - 1);
-			const text = truncateToWidth(ghost, room, "…");
-			// The marker places the terminal's own cursor at the start; a fake cursor would
-			// paint the first letter in reverse video and make it look typed, not suggested.
-			const body = `${CURSOR_MARKER}${GREY(text)}`;
-			const fill = " ".repeat(Math.max(0, width - pad * 2 - visibleWidth(text)));
-			lines[1] = `${" ".repeat(pad)}${body}${fill}${" ".repeat(pad)}`;
+	/**
+	 * Splice the suggestion into the line the editor underneath already rendered. The content
+	 * line of an empty editor is its prefix followed by nothing but spaces, so removing the
+	 * trailing run leaves the prefix byte for byte — escape codes included — and the suggestion
+	 * goes after it. Replacing the line instead would erase another extension's prompt glyph.
+	 */
+	function drawGhost(lines: string[]): string[] {
+		const line = lines[CONTENT_LINE] ?? "";
+		const prefix = line.replace(TRAILING_SPACES, "");
+		const room = visibleWidth(line) - visibleWidth(prefix);
+		if (room < 1) {
 			return lines;
 		}
+		const text = truncateToWidth(ghost, room, "…");
+		const next = [...lines];
+		// The marker places the terminal's own cursor at the start of the suggestion; a fake
+		// cursor would paint the first letter in reverse video and make it look typed, not offered.
+		next[CONTENT_LINE] = `${prefix}${CURSOR_MARKER}${GREY(text)}${" ".repeat(Math.max(0, room - visibleWidth(text)))}`;
+		return next;
+	}
+
+	/**
+	 * Put this extension on top of whatever editor is in the slot, leaving that editor working.
+	 *
+	 * Called at session_start and again before a suggestion is shown, because an extension that
+	 * replaces the slot outright — pi-cc-extensions does — wins whichever of the two ran last.
+	 * Replacing the slot rebuilds the editor and with it its undo stack and history, so this only
+	 * writes when the slot no longer holds this factory, and it writes only at a moment the editor
+	 * is empty and no extension dialog is open, which is what setEditorComponent needs not to
+	 * steal focus from.
+	 */
+	function installGhost(ctx: ExtensionContext): void {
+		const inner = ctx.ui.getEditorComponent();
+		if (installed && inner === ghostFactory) {
+			return;
+		}
+		ghostFactory = (terminal, theme, keybindings) => {
+			tui = terminal;
+			const editor = (inner ?? plainEditor)(terminal, theme, keybindings);
+			const render = editor.render.bind(editor);
+			// One call per frame: a wrapping editor may adjust its own padding around render, and
+			// calling it twice to test the result would run that juggling twice.
+			editor.render = (width: number) => {
+				const lines = render(width);
+				if (ghost && editor.getText() === "" && lines.length >= EDITOR_FRAME_LINES) {
+					return drawGhost(lines);
+				}
+				return lines;
+			};
+			return editor;
+		};
+		ctx.ui.setEditorComponent(ghostFactory);
+		installed = true;
 	}
 
 	/** Forget the suggestion and the guess behind it. */
@@ -223,6 +271,7 @@ export default function (pi: ExtensionAPI) {
 
 	function show(ctx: ExtensionContext, text: string) {
 		ghost = text;
+		installGhost(ctx);
 		ctx.ui.setWidget(WIDGET, [GREY(HINT)], { placement: "belowEditor" });
 		tui?.requestRender();
 	}
@@ -273,7 +322,7 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.mode !== "tui" || unlisten) {
 			return;
 		}
-		ctx.ui.setEditorComponent((t, theme, keybindings) => new GhostEditor(t, theme, keybindings));
+		installGhost(ctx);
 		unlisten = ctx.ui.onTerminalInput((data) => {
 			if (!ghost) {
 				// A key before the guess arrived: the user is writing their own message.

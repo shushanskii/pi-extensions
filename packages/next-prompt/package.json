@@ -1,6 +1,6 @@
 {
 	"name": "@shushanskii/next-prompt",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"description": "a suggested next message, shown as grey ghost text in the empty editor",
 	"repository": {
 		"type": "git",
