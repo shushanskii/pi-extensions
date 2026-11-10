@@ -100,7 +100,8 @@ interface Config {
 	/**
 	 * A generation is minutes, not milliseconds, and this is the only ceiling on the
 	 * wait: the transport is `node:https` with no timer of its own (see the header), so
-	 * unlike the `fetch` that stood here until 1.0.6, nothing cuts a long call off at
+	 * unlike the `fetch` that stood here through the published 1.0.4, nothing cuts a long
+	 * call off at
 	 * 300s. A request that outlives this one is reported as a timeout, and the
 	 * generation may well still finish on the box.
 	 */
