@@ -46,6 +46,8 @@ export interface PiEvent {
 	args?: { command?: string };
 	isError?: boolean;
 	result?: { content?: { text?: string }[]; details?: Record<string, unknown> };
+	/** What `onUpdate` streamed while the tool ran; only `tool_execution_update` carries it. */
+	partialResult?: { content?: { text?: string }[]; details?: Record<string, unknown> };
 }
 
 /**

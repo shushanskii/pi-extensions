@@ -21,19 +21,24 @@
  * "(tool image omitted: model does not support images)" in its place, and the file
  * is still on disk — so the path is never left out of the text.
  *
- * Why two endpoints. /v1/images/generations is the OpenAI-shaped one llama-swap
- * documents, and it carries prompt, n, size and output_format and nothing else.
- * Steps, seed and a negative prompt exist only on the SDAPI-shaped
- * /sdapi/v1/txt2img, which llama-swap forwards too. So the tool posts the OpenAI
- * body when the caller asks for nothing exotic, and switches to SDAPI when it names
- * a knob the OpenAI body has no field for. Both answer with base64; SDAPI always
- * answers with PNG whatever `format` says.
+ * Why two endpoints, and why SDAPI is the default. /v1/images/generations is the
+ * OpenAI-shaped one llama-swap documents; it carries prompt, n, size and output_format
+ * and nothing else — and sd-server leaves its progress status empty for calls arriving
+ * on it (measured 2026-11-10: job '' step 0/0 through a whole 512² generation). Steps,
+ * seed and a negative prompt exist only on the SDAPI-shaped /sdapi/v1/txt2img, which
+ * llama-swap forwards too and which does report sampling. So the tool posts SDAPI
+ * unless the caller named jpeg or webp, the one thing only the OpenAI shape carries;
+ * that call then has no progress line. Both answer with base64; SDAPI always answers
+ * with PNG whatever `format` says.
  *
- * Why no progress. sd-server reports sampling on /sdapi/v1/progress, but
- * llama-swap forwards txt2img, img2img and loras only, so a poll would have to go
- * through /upstream/qwen-image/ and start the model by itself. A call is one silent
- * wait, and the figures the guidelines quote are from this box: 19s at 256²/20 steps,
- * 57s at 512²/20, and the first call after five idle minutes also pays the weight
+ * Why the progress poll goes through /upstream/. sd-server reports sampling on
+ * /sdapi/v1/progress, but llama-swap forwards txt2img, img2img and loras only, so the
+ * poll takes the raw upstream route — and that route starts an unloaded model, 10 GiB
+ * for one status line (measured 2026-11-10). So the poller lives exactly as long as
+ * this tool's own generation: while a POST is in flight the model is loaded by
+ * definition, and a poll can only report on work already running. Without a watcher the
+ * wait is silent, and the figures the guidelines quote are from this box: 19s at 256²/20
+ * steps, 57s at 512²/20, and the first call after five idle minutes also pays the weight
  * load, because the ttl in llama-swap.yaml is 300. 1024²/20, the configured default and
  * therefore the usual request, was measured through this tool on 2026-11-02 at 337s and
  * 329s, two calls back to back: 5.8× the 512² wait, not the 4× its latent count
@@ -53,6 +58,17 @@
  * on 2026-11-02. `node:https` has no such timer; the only ceiling left is the caller's
  * `timeoutMs`. It does not follow redirects the way fetch did — nothing between this
  * tool and sd-server redirects a POST, and a 3xx would surface as a non-2xx error.
+ *
+ * Why cancel unloads. sd-server has no interrupt endpoint of its own (checked against
+ * the binary 2026-11-10: txt2img, img2img, progress, options, loras, samplers,
+ * schedulers, sd-models, upscalers, latent-upscale-modes), and it keeps sampling to
+ * the end after its client dies (measured the same day: client gone at 20s, the frame
+ * still finished at 50s). The only off switch is llama-swap's `POST
+ * /api/models/unload/<model>`, which kills the process — verified: unload at step 2/20
+ * answered 200 and the in-flight generation died with 502 four seconds later. So
+ * `cancel_generate_image` unloads, an Esc-abort unloads through `generate()`, and
+ * `session_shutdown` unloads while a generation is in flight. The next call pays the
+ * weight reload: ~1s from the page cache, ~96s from a cold disk.
  */
 
 import { spawn } from "node:child_process";
@@ -62,6 +78,7 @@ import { request as httpsRequest, type RequestOptions } from "node:https";
 import { homedir, tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 const CONFIG_PATH = join(homedir(), ".pi", "agent", "image.json");
@@ -131,6 +148,20 @@ const SEED_SERVER_PICKS = -1;
 // success and the last one a generation must not be.
 const HTTP_OK = 200;
 const HTTP_MULTIPLE_CHOICES = 300;
+// The poll is a courtesy to whoever watches the block: one second is finer than the
+// sampler's own pace and cheap enough to ignore.
+const PROGRESS_POLL_MS = 1000;
+// A status poll that outlives this is no longer reporting — the box is busy and the next
+// tick will try again. A cold model start answers nothing for minutes.
+const PROGRESS_GIVE_MS = 3000;
+// The cancel paths run from an abort or a dying session, so they get a short leash.
+const CANCEL_GIVE_MS = 5000;
+// The call line is one line: the prompt is shown until it stops fitting the point.
+const PROMPT_PREVIEW_CHARS = 60;
+// Sampling fractions arrive as 0..1; the line shows them as percent.
+const PERCENT = 100;
+const SECONDS_PER_MINUTE = 60;
+const ETA_DIGITS = 2;
 
 // `^1024x1024$`, with both sides named because both are read out of the match.
 const SIZE_PATTERN = /^(?<width>\d{3,4})x(?<height>\d{3,4})$/iu;
@@ -151,6 +182,17 @@ function stringField(value: unknown, key: string): string | undefined {
 	}
 	const raw = value[key];
 	if (typeof raw === "string") {
+		return raw;
+	}
+	return undefined;
+}
+
+function numberField(value: unknown, key: string): number | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const raw = value[key];
+	if (typeof raw === "number") {
 		return raw;
 	}
 	return undefined;
@@ -300,27 +342,27 @@ interface Generated {
 	echo: string;
 }
 
-/** What a POST came back with: the status line and the whole body, read to the end. */
-interface PostResult {
+/** What a request came back with: the status line and the whole body, read to the end. */
+interface HttpResult {
 	status: number;
 	text: string;
 }
 
 /**
- * One JSON POST over `node:https`/`node:http`, deliberately not `fetch`: undici's
+ * One JSON request over `node:https`/`node:http`, deliberately not `fetch`: undici's
  * `headersTimeout` (300s, no per-request knob) is shorter than a generation on this box,
  * and sd-server answers with the headers only when the image is done (header comment,
  * "Why not `fetch`"). These modules time nothing out on their own — `signal` is the only
  * way this wait ends early. No redirect following: nothing on the path redirects a POST.
  */
-function postJson(url: string, payload: string, signal: AbortSignal): Promise<PostResult> {
-	const options: RequestOptions = {
-		method: "POST",
-		headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(payload)) },
-		signal,
-	};
+function httpJson(method: string, url: string, payload: string | undefined, signal: AbortSignal): Promise<HttpResult> {
+	const headers: Record<string, string> = { "content-type": "application/json" };
+	if (payload !== undefined) {
+		headers["content-length"] = String(Buffer.byteLength(payload));
+	}
+	const options: RequestOptions = { method, headers, signal };
 	// `settle`, not `resolve`: node:path's resolve is already in this file's scope.
-	return new Promise<PostResult>((settle, reject) => {
+	return new Promise<HttpResult>((settle, reject) => {
 		const onResponse = (res: IncomingMessage): void => {
 			let text = "";
 			res.setEncoding("utf8");
@@ -337,15 +379,153 @@ function postJson(url: string, payload: string, signal: AbortSignal): Promise<Po
 			req = httpRequest(url, options, onResponse);
 		}
 		req.on("error", reject);
-		req.end(payload);
+		if (payload === undefined) {
+			req.end();
+		} else {
+			req.end(payload);
+		}
 	});
 }
+
+function postJson(url: string, payload: string, signal: AbortSignal): Promise<HttpResult> {
+	return httpJson("POST", url, payload, signal);
+}
+
+function getJson(url: string, signal: AbortSignal): Promise<HttpResult> {
+	return httpJson("GET", url, undefined, signal);
+}
+
+/** What sd-server says about the generation in flight, narrowed to what this file shows. */
+interface Progress {
+	step: number;
+	steps: number;
+	fraction: number;
+	etaSec: number;
+}
+
+/**
+ * The A1111-shaped status: `state.sampling_step` of `sampling_steps`, an overall
+ * `progress` fraction and `eta_relative` seconds. The keys are the server's vocabulary,
+ * so every field is read through a guard rather than trusted.
+ */
+function parseProgress(text: string): Progress | undefined {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return undefined;
+	}
+	let state: unknown;
+	if (isRecord(parsed)) {
+		({ state } = parsed);
+	}
+	return {
+		step: numberField(state, "sampling_step") ?? 0,
+		steps: numberField(state, "sampling_steps") ?? 0,
+		fraction: numberField(parsed, "progress") ?? 0,
+		etaSec: numberField(parsed, "eta_relative") ?? 0,
+	};
+}
+
+/** One line of it: what the sampler is on, how far along, and when it should be done. */
+function progressLine(p: Progress): string {
+	if (p.steps === 0) {
+		return "waiting: the box is loading weights or encoding the prompt";
+	}
+	const pct = Math.round(p.fraction * PERCENT);
+	return `sampling ${p.step}/${p.steps} · ${pct}% · ETA ${clock(p.etaSec)}`;
+}
+
+/** Seconds to m:ss — an ETA of 300 should read as 5:00, not as 300. */
+function clock(sec: number): string {
+	const whole = Math.max(0, Math.round(sec));
+	const mm = Math.floor(whole / SECONDS_PER_MINUTE);
+	const ss = String(whole % SECONDS_PER_MINUTE).padStart(ETA_DIGITS, "0");
+	return `${mm}:${ss}`;
+}
+
+/** The prompt as the call line shows it: whole when it fits, a head with an ellipsis when not. */
+function preview(prompt: string): string {
+	if (prompt.length <= PROMPT_PREVIEW_CHARS) {
+		return prompt;
+	}
+	return `${prompt.slice(0, PROMPT_PREVIEW_CHARS - 1)}…`;
+}
+
+/** The text blocks of a result, joined — what the settled block shows, images aside. */
+function textOf(content: { type: string; text?: string }[]): string {
+	return content
+		.filter((c) => c.type === "text")
+		.map((c) => c.text ?? "")
+		.join("\n");
+}
+
+/** The origin the llama-swap management routes (`/running`, `/api/models/unload`) hang off. */
+function originOf(cfg: Config): string {
+	return new URL(cfg.baseUrl.replace(TRAILING_SLASH, "")).origin;
+}
+
+/** llama-swap's registry: the models answering right now, by name. */
+async function runningModels(origin: string, signal: AbortSignal): Promise<string[]> {
+	const res = await getJson(`${origin}/running`, signal);
+	if (res.status !== HTTP_OK) {
+		return [];
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(res.text);
+	} catch {
+		return [];
+	}
+	let list: unknown[];
+	if (isRecord(parsed) && Array.isArray(parsed.running)) {
+		list = parsed.running;
+	} else {
+		list = [];
+	}
+	const names: string[] = [];
+	for (const entry of list) {
+		const name = stringField(entry, "model") ?? stringField(entry, "name");
+		if (name) {
+			names.push(name);
+		}
+	}
+	return names;
+}
+
+/**
+ * Stop the box: llama-swap unloads — kills — the model process, and whatever it is
+ * generating dies with it (see the header comment, "Why cancel unloads"). Unloading a
+ * model that is not running is a no-op worth reporting, not an error.
+ */
+async function cancelGeneration(origin: string, model: string, signal: AbortSignal): Promise<string> {
+	const running = await runningModels(origin, signal).catch(() => [] as string[]);
+	if (!running.includes(model)) {
+		return `nothing to cancel: ${model} is not running`;
+	}
+	const res = await postJson(`${origin}/api/models/unload/${model}`, "", signal);
+	if (res.status < HTTP_OK || res.status >= HTTP_MULTIPLE_CHOICES) {
+		throw new Error(`${model}: unload answered HTTP ${res.status} — ${res.text.slice(0, PREVIEW_CHARS)}`);
+	}
+	return `unloaded ${model}: the generation is stopped; the next generate_image pays the weight reload`;
+}
+
+// Generations this process has in flight right now; session end unloads the box while
+// the count is above zero.
+let inFlight = 0;
 
 /**
  * One generation. `signal` is pi's abort: Esc during a long wait has to reach the
  * request, or the request keeps burning the GPU after the session has moved on.
+ * `onProgress`, when given, hears about the sampling once a second while the POST is
+ * in flight — see the header comment for why the poll may only run in that window.
  */
-async function generate(cfg: Config, args: Args, signal: AbortSignal): Promise<Generated> {
+async function generate(
+	cfg: Config,
+	args: Args,
+	signal: AbortSignal,
+	onProgress?: (p: Progress) => void,
+): Promise<Generated> {
 	const size = parseSize(args.size ?? cfg.size);
 	if ("error" in size) {
 		throw new Error(size.error);
@@ -354,19 +534,25 @@ async function generate(cfg: Config, args: Args, signal: AbortSignal): Promise<G
 	const steps = args.steps ?? DEFAULT_STEPS;
 	const seed = args.seed ?? SEED_SERVER_PICKS;
 
-	// The OpenAI body has no field for steps, seed or a negative prompt. When one is
-	// named the request moves to the SDAPI shape — which llama-swap serves off the
-	// origin, not off the /v1 the OpenAI routes hang under, hence `origin`.
+	// The OpenAI body has no field for steps, seed or a negative prompt — and sd-server
+	// leaves its progress status empty while a generation arrives on that route (measured
+	// 2026-11-10: job '' step 0/0 for a whole 512² call, while the same call on SDAPI
+	// walked 1/20 to 20/20). So SDAPI is the default route: it carries every knob and it
+	// is the route the progress poll can report on. The OpenAI shape stays for the one
+	// thing only it does — jpeg and webp output — and the progress line then stays at
+	// "waiting", which the format parameter's description tells the model.
+	const format = args.format ?? cfg.format;
 	const knobs = args.steps !== undefined || args.seed !== undefined || Boolean(args.negativePrompt);
 	const api = cfg.baseUrl.replace(TRAILING_SLASH, "");
+	const origin = originOf(cfg);
 	// `negative_prompt`, `cfg_scale`, `batch_size` and `output_format` are the server's
 	// vocabulary rather than this file's, so both shapes are built as maps: the keys are wire
 	// data, and the naming rule is about the identifiers this file owns.
 	const body: Record<string, unknown> = { model: cfg.model, prompt: args.prompt };
 	let url: string;
 	let route: string;
-	if (knobs) {
-		url = `${new URL(api).origin}/sdapi/v1/txt2img`;
+	if (format === "png" || knobs) {
+		url = `${origin}/sdapi/v1/txt2img`;
 		body.width = size.width;
 		body.height = size.height;
 		body.steps = steps;
@@ -379,79 +565,149 @@ async function generate(cfg: Config, args: Args, signal: AbortSignal): Promise<G
 		url = `${api}/images/generations`;
 		body.n = n;
 		body.size = `${size.width}x${size.height}`;
-		body.output_format = args.format ?? cfg.format;
+		body.output_format = format;
 		route = "images/generations";
 	}
 
 	const started = Date.now();
-	// pi's abort plus a ceiling of our own. Nothing else bounds this wait: pi's
-	// httpIdleTimeoutMs governs provider requests, not a tool's own request, and neither
-	// Caddy nor llama-swap times out an upstream generation.
-	const timeout = AbortSignal.timeout(cfg.timeoutMs);
-	const res = await postJson(url, JSON.stringify(body), AbortSignal.any([signal, timeout])).catch((err: Error) => {
-		if (timeout.aborted) {
-			throw new Error(
-				`${cfg.model}: no answer from ${new URL(url).pathname} in ${Math.round(cfg.timeoutMs / MS_PER_SECOND)}s. ` +
-					"The generation may still be running on the box — GET /running on the same host says what is loaded.",
-			);
-		}
-		// A bare "fetch failed" hid the real cause behind undici's wrapper; node:https
-		// reports ECONNREFUSED and friends directly, and cause stays for whatever wraps.
-		let cause = "";
-		if (err.cause instanceof Error) {
-			cause = ` (${err.cause.message})`;
-		}
-		throw new Error(`${cfg.model}: ${url} — ${err.message}${cause}`);
-	});
-
-	const { status, text } = res;
-	if (status < HTTP_OK || status >= HTTP_MULTIPLE_CHOICES) {
-		// sd-server answers {"error":"..."}, llama-swap {"src":"llama-swap","error":{...}}.
-		const detail = text.slice(0, DETAIL_CHARS).replace(WHITESPACE_RUN, " ");
-		throw new Error(`${cfg.model}: HTTP ${status} from ${new URL(url).pathname} — ${detail}`);
+	// The poller lives exactly as long as this POST: /upstream/ starts an unloaded model,
+	// and while the generation is in flight the model is loaded by definition. A poll
+	// that fails or stalls is silence, not an error — the generation does not need it.
+	let poller: ReturnType<typeof setInterval> | undefined;
+	if (onProgress) {
+		const progressUrl = `${origin}/upstream/${cfg.model}/sdapi/v1/progress`;
+		// sd-server leaves `eta_relative` at 0 on this route (measured 2026-11-10: step
+		// 8/20, progress 0.4, eta 0.0 — its own ETA only reaches stdout), so the ETA is
+		// derived: the time this call has been running, scaled by what the fraction says
+		// is left. A cold start overestimates it at first — load time is in the elapsed —
+		// and it settles as the fraction moves.
+		let lastSteps = 0;
+		poller = setInterval(() => {
+			const give = AbortSignal.any([signal, AbortSignal.timeout(PROGRESS_GIVE_MS)]);
+			getJson(progressUrl, give)
+				.then((r) => {
+					if (r.status !== HTTP_OK) {
+						return;
+					}
+					const p = parseProgress(r.text);
+					if (!p) {
+						return;
+					}
+					if (p.steps > 0) {
+						lastSteps = p.steps;
+					} else if (lastSteps > 0) {
+						// The status went back to empty after sampling: the frame is sampled and
+						// the VAE decode is running. Hold the line at done rather than rewind
+						// to "waiting", which would read as a restart.
+						p.step = lastSteps;
+						p.steps = lastSteps;
+						p.fraction = 1;
+					}
+					if (p.fraction > 0 && p.etaSec <= 0) {
+						const done = p.fraction;
+						p.etaSec = ((Date.now() - started) / MS_PER_SECOND) * ((1 - done) / done);
+					}
+					onProgress(p);
+				})
+				.catch(() => undefined);
+		}, PROGRESS_POLL_MS);
 	}
-
-	let parsed: unknown;
+	inFlight += 1;
 	try {
-		parsed = JSON.parse(text);
-	} catch (error) {
-		throw new Error(`${cfg.model}: the response was not JSON (${text.slice(0, PREVIEW_CHARS)})`, { cause: error });
+		// pi's abort plus a ceiling of our own. Nothing else bounds this wait: pi's
+		// httpIdleTimeoutMs governs provider requests, not a tool's own request, and neither
+		// Caddy nor llama-swap times out an upstream generation.
+		const timeout = AbortSignal.timeout(cfg.timeoutMs);
+		let res: HttpResult;
+		try {
+			res = await postJson(url, JSON.stringify(body), AbortSignal.any([signal, timeout]));
+		} catch (raw: unknown) {
+			const err = raw as Error;
+			if (timeout.aborted) {
+				throw new Error(
+					`${cfg.model}: no answer from ${new URL(url).pathname} in ${Math.round(cfg.timeoutMs / MS_PER_SECOND)}s. ` +
+						"The generation may still be running on the box — GET /running on the same host says what is loaded.",
+					{ cause: raw },
+				);
+			}
+			if (signal.aborted) {
+				// The client is gone; the box is not: sd-server samples to the end after its
+				// connection dies (header, "Why cancel unloads"). Tell llama-swap to stop it,
+				// best effort on a short leash — this path also runs while the session ends.
+				try {
+					await cancelGeneration(origin, cfg.model, AbortSignal.timeout(CANCEL_GIVE_MS));
+				} catch {
+					// A box that cannot be reached cannot be cancelled either.
+				}
+				throw new Error(`${cfg.model}: cancelled — llama-swap was told to stop the generation.`, { cause: raw });
+			}
+			// A bare "fetch failed" hid the real cause behind undici's wrapper; node:https
+			// reports ECONNREFUSED and friends directly, and cause stays for whatever wraps.
+			let cause = "";
+			if (err.cause instanceof Error) {
+				cause = ` (${err.cause.message})`;
+			}
+			throw new Error(`${cfg.model}: ${url} — ${err.message}${cause}`, { cause: raw });
+		}
+
+		const { status, text } = res;
+		if (status < HTTP_OK || status >= HTTP_MULTIPLE_CHOICES) {
+			// sd-server answers {"error":"..."}, llama-swap {"src":"llama-swap","error":{...}}.
+			const detail = text.slice(0, DETAIL_CHARS).replace(WHITESPACE_RUN, " ");
+			throw new Error(`${cfg.model}: HTTP ${status} from ${new URL(url).pathname} — ${detail}`);
+		}
+
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(text);
+		} catch (error) {
+			throw new Error(`${cfg.model}: the response was not JSON (${text.slice(0, PREVIEW_CHARS)})`, {
+				cause: error,
+			});
+		}
+
+		const b64 = base64Images(parsed);
+		if (b64.length === 0) {
+			throw new Error(`${cfg.model}: no image in the response (${text.slice(0, PREVIEW_CHARS)})`);
+		}
+
+		// SDAPI has no output_format on txt2img and always answers with PNG. What the server
+		// says it produced is also what gets echoed back: a request for webp that comes back as
+		// png has to be visible in the result, not papered over with the format asked for.
+		const produced = stringField(parsed, "output_format") ?? "png";
+		const mime = mimeOf(produced);
+		const ext = extensionOf(mime);
+		// The echo follows the route that answered, not the knobs: a plain call rides SDAPI
+		// too now, and its line has to say what SDAPI was told.
+		let echo: string;
+		if (route === "sdapi/txt2img") {
+			echo = `steps ${steps}, cfg ${cfg.cfgScale}, seed ${seed}`;
+		} else {
+			echo = `size ${size.width}x${size.height}, ${produced}`;
+		}
+
+		let base: string;
+		if (args.path) {
+			base = resolve(expand(args.path));
+		} else {
+			base = join(expand(cfg.dir), `${stamp()}-${slug(args.prompt)}`);
+		}
+		mkdirSync(dirname(base), { recursive: true });
+
+		const images = b64.map((data, i) => {
+			const path = pathFor(base, i, b64.length, ext);
+			const buf = Buffer.from(data, "base64");
+			writeFileSync(path, buf);
+			return { path, bytes: buf.length, mime, data };
+		});
+
+		return { images, ms: Date.now() - started, route, echo };
+	} finally {
+		inFlight -= 1;
+		if (poller !== undefined) {
+			clearInterval(poller);
+		}
 	}
-
-	const b64 = base64Images(parsed);
-	if (b64.length === 0) {
-		throw new Error(`${cfg.model}: no image in the response (${text.slice(0, PREVIEW_CHARS)})`);
-	}
-
-	// SDAPI has no output_format on txt2img and always answers with PNG. What the server
-	// says it produced is also what gets echoed back: a request for webp that comes back as
-	// png has to be visible in the result, not papered over with the format asked for.
-	const produced = stringField(parsed, "output_format") ?? "png";
-	const mime = mimeOf(produced);
-	const ext = extensionOf(mime);
-	let echo: string;
-	if (knobs) {
-		echo = `steps ${steps}, cfg ${cfg.cfgScale}, seed ${seed}`;
-	} else {
-		echo = `size ${size.width}x${size.height}, ${produced}`;
-	}
-
-	let base: string;
-	if (args.path) {
-		base = resolve(expand(args.path));
-	} else {
-		base = join(expand(cfg.dir), `${stamp()}-${slug(args.prompt)}`);
-	}
-	mkdirSync(dirname(base), { recursive: true });
-
-	const images = b64.map((data, i) => {
-		const path = pathFor(base, i, b64.length, ext);
-		const buf = Buffer.from(data, "base64");
-		writeFileSync(path, buf);
-		return { path, bytes: buf.length, mime, data };
-	});
-
-	return { images, ms: Date.now() - started, route, echo };
 }
 
 function openIn(path: string): void {
@@ -492,7 +748,10 @@ export default function (pi: ExtensionAPI) {
 			),
 			n: Type.Optional(Type.Number({ description: "How many images, 1..4. Default 1." })),
 			format: Type.Optional(
-				Type.String({ description: "png (default), jpeg or webp. Ignored when steps/seed/negativePrompt are set." }),
+				Type.String({
+					description:
+						"png (default), jpeg or webp. jpeg and webp lose the progress line and are ignored when steps/seed/negativePrompt are set.",
+				}),
 			),
 			path: Type.Optional(
 				Type.String({ description: "Where to write. Default: the configured directory, named by time and prompt." }),
@@ -507,9 +766,21 @@ export default function (pi: ExtensionAPI) {
 			open: Type.Optional(Type.Boolean({ description: "Open the finished file in the OS viewer." })),
 		}),
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
-		async execute(_id, args, signal, _onUpdate, ctx) {
+		async execute(_id, args, signal, onUpdate, ctx) {
 			const a = args as Args;
-			const out = await generate(cfg, a, signal ?? new AbortController().signal);
+			// The block re-renders on every update, so only a line that changed is worth one.
+			let lastLine = "";
+			const out = await generate(cfg, a, signal ?? new AbortController().signal, (p) => {
+				const line = progressLine(p);
+				if (line === lastLine) {
+					return;
+				}
+				lastLine = line;
+				onUpdate?.({
+					content: [{ type: "text", text: line }],
+					details: { files: [], ms: 0, route: "", echo: "", seenByModel: false, progress: p },
+				});
+			});
 			if (a.open ?? cfg.open) {
 				for (const f of out.images) {
 					openIn(f.path);
@@ -553,9 +824,72 @@ export default function (pi: ExtensionAPI) {
 				},
 			};
 		},
+		renderCall(args, theme, context) {
+			const a = args as Partial<Args>;
+			const bits = [cfg.model, a.size ?? cfg.size];
+			if (a.steps !== undefined) {
+				bits.push(`${a.steps} steps`);
+			}
+			if (a.n !== undefined && a.n > 1) {
+				bits.push(`n ${a.n}`);
+			}
+			if (a.seed !== undefined) {
+				bits.push(`seed ${a.seed}`);
+			}
+			let line = theme.fg("toolTitle", theme.bold("generate_image")) + theme.fg("muted", ` · ${bits.join(" · ")}`);
+			if (a.prompt) {
+				line += theme.fg("dim", ` "${preview(a.prompt)}"`);
+			}
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			text.setText(line);
+			return text;
+		},
+		renderResult(result, options, theme, context) {
+			const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+			if (options.isPartial) {
+				// The partial's text is the progress line the poller last produced.
+				text.setText(theme.fg("muted", textOf(result.content ?? []) || "…"));
+				return text;
+			}
+			text.setText(textOf(result.content ?? []));
+			return text;
+		},
 	});
 
 	pi.registerTool(tool);
+
+	pi.registerTool(
+		defineTool({
+			name: "cancel_generate_image",
+			label: "Cancel image",
+			description:
+				"Stop the qwen-image generation running on the box right now by unloading the model. " +
+				"The box keeps sampling even after its client is gone, so an abandoned or stuck generation " +
+				"has to be cancelled here. No-ops when nothing is running; the next generate_image then " +
+				"pays the weight reload.",
+			promptSnippet: "Stop the qwen-image generation running on the box",
+			promptGuidelines: [
+				"Call cancel_generate_image when the user cancels a running generate_image or asks to stop " +
+					"it: the box keeps sampling to the end with nobody waiting, holding ~10 GiB of the GPU.",
+			],
+			parameters: Type.Object({}),
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false, idempotentHint: true },
+			async execute(_id, _args, signal) {
+				const note = await cancelGeneration(originOf(cfg), cfg.model, signal ?? new AbortController().signal);
+				return { content: [{ type: "text", text: note }], details: { note } };
+			},
+		}),
+	);
+
+	pi.on("session_shutdown", async () => {
+		if (inFlight === 0) {
+			return;
+		}
+		// The Esc path already cancels through generate()'s abort branch; this is the belt
+		// for the exits that skip it (SIGTERM, reload, new session): an orphaned POST left
+		// on the box keeps sampling for minutes with nobody waiting.
+		await cancelGeneration(originOf(cfg), cfg.model, AbortSignal.timeout(CANCEL_GIVE_MS)).catch(() => undefined);
+	});
 
 	pi.registerCommand("image", {
 		description: "qwen-image: test | config | <prompt>",
@@ -587,7 +921,9 @@ export default function (pi: ExtensionAPI) {
 			let calls: Args[] = [{ prompt }];
 			if (small) {
 				calls = [
-					{ prompt, size: "256x256", path: join(dir, `pi-image-test-${tag}.png`) },
+					// The jpeg call is what keeps the OpenAI route under test: png goes SDAPI now,
+					// being the route that can report progress.
+					{ prompt, size: "256x256", format: "jpeg", path: join(dir, `pi-image-test-${tag}.jpg`) },
 					{ prompt, size: "256x256", steps: 12, path: join(dir, `pi-image-test-${tag}-sdapi.png`) },
 				];
 			}
@@ -608,9 +944,11 @@ export default function (pi: ExtensionAPI) {
 			let failed = false;
 			for (const [i, call] of calls.entries()) {
 				const knobs = call.steps !== undefined || call.seed !== undefined || Boolean(call.negativePrompt);
-				let label = "images/generations";
-				if (knobs) {
-					label = "sdapi/txt2img";
+				// The same route rule generate() applies: SDAPI unless a non-png format sent it away.
+				const sdapi = (call.format ?? cfg.format) === "png" || knobs;
+				let label = "sdapi/txt2img";
+				if (!sdapi) {
+					label = "images/generations";
 				}
 				if (calls.length > 1) {
 					label = `${i + 1}/${calls.length} ${label}`;
