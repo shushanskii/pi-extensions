@@ -17,7 +17,7 @@ let tui: Tui;
 /** Slow enough that the live line is on screen long enough to be read. */
 const ROUTE_DELAY_MS = 3000;
 const GENERATIONS_DONE =
-	/^ image: ✓ 1\/2 images\/generations \d+s — <HOME>\/tmp\/pi-image-test-\d+-\d+\.png \(size 256x256, png\)$/u;
+	/^ image: ✓ 1\/2 images\/generations \d+s — <HOME>\/tmp\/pi-image-test-\d+-\d+\.jpg \(size 256x256, png\)$/u;
 const SDAPI_DONE =
 	/^ image: ✓ 2\/2 sdapi\/txt2img \d+s — <HOME>\/tmp\/pi-image-test-\d+-\d+-sdapi\.png \(steps 12, cfg 6, seed -1\)$/u;
 

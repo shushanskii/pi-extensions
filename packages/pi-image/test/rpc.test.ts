@@ -6,7 +6,7 @@
 
 import { existsSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
-import { type FakeServer, scriptedModels, startFakeServer } from "../../../tests/fake-server.ts";
+import { type FakeServer, HTTP_OK, scriptedModels, startFakeServer } from "../../../tests/fake-server.ts";
 import { type Home, makeHome } from "../../../tests/home.ts";
 import type { PiEvent } from "../../../tests/pi.ts";
 import { type Pi, startPi } from "../../../tests/rpc.ts";
@@ -19,7 +19,7 @@ const TURN_WAIT_MS = 15_000;
 // The widget and notify lines, with the seconds and the temp path left open.
 const DONE_NOTICE = /^image: done in \d+s$/u;
 const FAILED_NOTICE = /^image: failed after/u;
-const GENERATIONS_LINE = /^image: ✓ 1\/2 images\/generations \d+s — .*pi-image-test-.*\.png \(size 256x256, png\)$/u;
+const GENERATIONS_LINE = /^image: ✓ 1\/2 images\/generations \d+s — .*pi-image-test-.*\.jpg \(size 256x256, jpeg\)$/u;
 const SDAPI_LINE = /^image: ✓ 2\/2 sdapi\/txt2img \d+s — .*-sdapi\.png \(steps 12, cfg 6, seed -1\)$/u;
 const FOX_FILE = /-a-red-fox\.png$/u;
 
@@ -98,6 +98,13 @@ describe("commands, no model", () => {
 	});
 
 	test("/image test walks both routes and keeps a widget line for each", async () => {
+		// The jpeg echo makes the OpenAI-route answer honest: the server's word on what it
+		// produced is what the widget line shows.
+		const img: Record<string, unknown> = {};
+		img.b64_json = TINY_PNG_B64;
+		const jpegAnswer: Record<string, unknown> = { data: [img] };
+		jpegAnswer.output_format = "jpeg";
+		server.route("/v1/images/generations", HTTP_OK, jpegAnswer);
 		await harness.pi.client.prompt("/image test");
 		const done = await harness.pi.waitForUi((r) => r.method === "notify");
 		expect(done).toMatchObject({ notifyType: "info", message: expect.stringMatching(DONE_NOTICE) });
@@ -139,12 +146,48 @@ async function toolResult(pi: Pi, message: string): Promise<PiEvent> {
 	return end as PiEvent;
 }
 
-/** The body pi-image posted, with `output_format` spelled the way the server wants it. */
-function expectedGenerationBody(size: string): Record<string, unknown> {
-	const body: Record<string, unknown> = { model: "qwen-image", prompt: "a red fox", n: 1, size };
-	body.output_format = "png";
+/** The cfg the server was started with and the tool passes through unchanged. */
+const DEFAULT_CFG_SCALE = 6;
+/** The body pi-image posts on the SDAPI route for the plain 256² call of these tests. */
+function expectedSdapiBody(): Record<string, unknown> {
+	const body: Record<string, unknown> = {
+		model: "qwen-image",
+		prompt: "a red fox",
+		width: 256,
+		height: 256,
+		steps: 20,
+		seed: -1,
+	};
+	body.negative_prompt = "";
+	body.cfg_scale = DEFAULT_CFG_SCALE;
+	body.batch_size = 1;
 	return body;
 }
+
+// The 1×1 PNG the fake server answers with, for a route this test re-registers with a delay.
+// biome-ignore lint/security/noSecrets: a transparent pixel, not a credential
+const TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+/** How long the fake route holds the answer: minutes on the GPU, two seconds here. */
+const GPU_HOLD_MS = 2000;
+/** Longer than the poller's first tick, so an update lands before the held answer does. */
+const LONG_HOLD_MS = 3000;
+/** How long the abort test lets the generation run before pulling the plug. */
+const ABORT_AFTER_MS = 1500;
+/** The SDAPI answer for a route the test holds open: the server's key goes in by field. */
+function heldAnswer(): Record<string, unknown> {
+	const held: Record<string, unknown> = {};
+	held.images = [TINY_PNG_B64];
+	return held;
+}
+/** llama-swap's /running answer with the image model loaded. */
+function runningWithModel(): Record<string, unknown> {
+	return { running: [{ model: "qwen-image" }] };
+}
+/** The fixed status the fake progress route reports: step 10 of 20, half done, ten seconds left. */
+const PROGRESS_STEP = 10;
+const PROGRESS_STEPS = 20;
+const PROGRESS_FRACTION = 0.5;
+const PROGRESS_ETA_SEC = 10;
 
 describe("tool, text-only model", () => {
 	const harness = withPi("text-only");
@@ -154,14 +197,13 @@ describe("tool, text-only model", () => {
 		const end = await toolResult(harness.pi, "draw a fox");
 
 		expect(end.isError).toBe(false);
-		expect(server.log.find((r) => r.path === "/v1/images/generations")?.body).toEqual(
-			expectedGenerationBody("256x256"),
-		);
+		// The plain call rides the SDAPI route now: it is the route that reports progress.
+		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toEqual(expectedSdapiBody());
 		const details = detailsOf(end);
 		expect(details.files[0].path.startsWith(`${home.dir}/pictures/`)).toBe(true);
 		expect(details.files[0].path).toMatch(FOX_FILE);
 		expect(existsSync(details.files[0].path)).toBe(true);
-		expect(details).toMatchObject({ route: "images/generations", seenByModel: false });
+		expect(details).toMatchObject({ route: "sdapi/txt2img", seenByModel: false });
 		expect(end.result?.content?.[0]?.text).toContain("You have NOT seen these: the active model (text-only)");
 
 		// What pi sent the model after the tool ran: the path, and no image.
@@ -185,6 +227,77 @@ describe("tool, text-only model", () => {
 		expect(end.isError).toBe(true);
 		expect(end.result?.content?.[0]?.text).toBe("width 300 is not divisible by 32");
 		expect(server.log.filter((r) => r.path !== "/v1/chat/completions")).toEqual([]);
+	});
+
+	test("a response held open is waited out, not timed out", async () => {
+		// The GPU holds the response for minutes and sends the headers with the finished
+		// image; the old fetch transport cut that off at 300s (package header, "Why not
+		// `fetch`"). 2s stands in for the minutes — the point is that holding is not an error.
+		server.route("/sdapi/v1/txt2img", HTTP_OK, heldAnswer(), GPU_HOLD_MS);
+		drawAndStop({ size: "256x256" });
+		const end = await toolResult(harness.pi, "a fox behind a slow GPU");
+
+		expect(end.isError).toBe(false);
+		expect(detailsOf(end).route).toBe("sdapi/txt2img");
+	});
+
+	test("progress streams to the block while the box is busy", async () => {
+		// The keys are sd-server's A1111-shaped status, so they go in field by field.
+		const state: Record<string, unknown> = {};
+		state.sampling_step = PROGRESS_STEP;
+		state.sampling_steps = PROGRESS_STEPS;
+		const status: Record<string, unknown> = { state };
+		status.progress = PROGRESS_FRACTION;
+		status.eta_relative = PROGRESS_ETA_SEC;
+		server.route("/upstream/qwen-image/sdapi/v1/progress", HTTP_OK, status);
+		// Held longer than the poller's first tick, so at least one update precedes the end.
+		server.route("/sdapi/v1/txt2img", HTTP_OK, heldAnswer(), LONG_HOLD_MS);
+		drawAndStop({ size: "256x256" });
+
+		const events = (await harness.pi.client.promptAndWait("draw a slow fox", undefined, TURN_WAIT_MS)) as PiEvent[];
+		const update = events.find((e) => e.type === "tool_execution_update");
+		const progress = update?.partialResult?.details?.progress as { step?: number } | undefined;
+		expect(progress?.step).toBe(PROGRESS_STEP);
+		expect(update?.partialResult?.content?.[0]?.text).toContain(`sampling ${PROGRESS_STEP}/${PROGRESS_STEPS}`);
+		const end = events.find((e) => e.type === "tool_execution_end");
+		expect(end?.isError).toBe(false);
+	});
+
+	test("cancel_generate_image unloads a running model", async () => {
+		server.route("/running", HTTP_OK, runningWithModel());
+		server.route("/api/models/unload/qwen-image", HTTP_OK, "OK");
+		server.script({ tool: "cancel_generate_image", args: {} }, { text: "stopped" });
+		const end = await toolResult(harness.pi, "stop the picture");
+
+		expect(end.isError).toBe(false);
+		expect(end.result?.content?.[0]?.text).toContain("unloaded qwen-image");
+		expect(server.log.map((r) => r.path)).toContain("/api/models/unload/qwen-image");
+	});
+
+	test("cancel is a no-op when nothing runs", async () => {
+		server.route("/running", HTTP_OK, { running: [] });
+		server.script({ tool: "cancel_generate_image", args: {} }, { text: "ok" });
+		const end = await toolResult(harness.pi, "stop nothing");
+
+		expect(end.result?.content?.[0]?.text).toContain("nothing to cancel");
+		expect(server.log.map((r) => r.path)).not.toContain("/api/models/unload/qwen-image");
+	});
+
+	test("aborting the call tells llama-swap to stop the box", async () => {
+		// The box keeps sampling after its client dies (package header, "Why cancel
+		// unloads"), so the abort branch of generate() must reach the unload route.
+		server.route("/running", HTTP_OK, runningWithModel());
+		server.route("/api/models/unload/qwen-image", HTTP_OK, "OK");
+		server.route("/sdapi/v1/txt2img", HTTP_OK, heldAnswer(), LONG_HOLD_MS);
+		// Only the tool-call turn: the abort ends the run, so no answer turn is ever asked for.
+		server.script({ tool: "generate_image", args: { prompt: "a red fox", size: "256x256" } });
+
+		const prompt = harness.pi.client.promptAndWait("draw a fox", undefined, TURN_WAIT_MS);
+		await new Promise((r) => setTimeout(r, ABORT_AFTER_MS));
+		await harness.pi.client.abort();
+		await prompt.catch(() => undefined);
+
+		expect(server.log.map((r) => r.path)).toContain("/api/models/unload/qwen-image");
 	});
 });
 
