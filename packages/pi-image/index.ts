@@ -43,10 +43,22 @@
  * Config: ~/.pi/agent/image.json — the same directory and plaintext convention as
  * tts.json. `/image test` proves both routes, one after the other on the one GPU, for
  * the price of two 256² generations — about 40 s of it warm.
+ *
+ * Why not `fetch`. Node's global fetch is undici, and undici abandons a response whose
+ * headers have not arrived by `headersTimeout` — 300s by default, no per-request knob.
+ * sd-server on halogen sends the headers with the finished image, so a generation longer
+ * than that dies client-side while the box keeps sampling: measured 2026-11-09, two
+ * 1024²/30 calls cut off at 301.0s each, and again 2026-11-10 on a cold-disk 1024²/20.
+ * The old llm box answered headers early, which is why the same call at 337s completed
+ * on 2026-11-02. `node:https` has no such timer; the only ceiling left is the caller's
+ * `timeoutMs`. It does not follow redirects the way fetch did — nothing between this
+ * tool and sd-server redirects a POST, and a 3xx would surface as a non-2xx error.
  */
 
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { type ClientRequest, request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest, type RequestOptions } from "node:https";
 import { homedir, tmpdir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -69,13 +81,11 @@ interface Config {
 	/** Where the files go when the caller names no path. */
 	dir: string;
 	/**
-	 * A generation is minutes, not milliseconds, and above ~300s this knob is not the
-	 * binding limit: Node's own fetch abandons a response whose headers have not arrived
-	 * (re-measured 2026-11-02 on Node v26.13.0, twice: `UND_ERR_HEADERS_TIMEOUT` at 302s
-	 * from a server that held them for 900s). It has not bitten on this route — a 1024²
-	 * generation ran 337s end to end the same day and completed, so the headers arrive
-	 * long before the pixels do. Raising this only means something once the transport
-	 * stops being `fetch`.
+	 * A generation is minutes, not milliseconds, and this is the only ceiling on the
+	 * wait: the transport is `node:https` with no timer of its own (see the header), so
+	 * unlike the `fetch` that stood here until 1.0.6, nothing cuts a long call off at
+	 * 300s. A request that outlives this one is reported as a timeout, and the
+	 * generation may well still finish on the box.
 	 */
 	timeoutMs: number;
 	/** Hand the finished file to the OS opener, the way the voice hands a WAV to afplay. */
@@ -116,6 +126,11 @@ const TICK_MS = 1000;
 const DEFAULT_STEPS = 20;
 // -1 is SDAPI's "pick one", so the default seed is a value rather than an absence.
 const SEED_SERVER_PICKS = -1;
+// The 2xx band. fetch answered `res.ok` for free; the raw transport compares the number,
+// so both edges get a name — 300 (Multiple Choices) is the first status that is not a
+// success and the last one a generation must not be.
+const HTTP_OK = 200;
+const HTTP_MULTIPLE_CHOICES = 300;
 
 // `^1024x1024$`, with both sides named because both are read out of the match.
 const SIZE_PATTERN = /^(?<width>\d{3,4})x(?<height>\d{3,4})$/iu;
@@ -285,9 +300,50 @@ interface Generated {
 	echo: string;
 }
 
+/** What a POST came back with: the status line and the whole body, read to the end. */
+interface PostResult {
+	status: number;
+	text: string;
+}
+
 /**
- * One generation. `signal` is pi's abort: Esc during a long wait has to reach fetch,
- * or the request keeps burning the GPU after the session has moved on.
+ * One JSON POST over `node:https`/`node:http`, deliberately not `fetch`: undici's
+ * `headersTimeout` (300s, no per-request knob) is shorter than a generation on this box,
+ * and sd-server answers with the headers only when the image is done (header comment,
+ * "Why not `fetch`"). These modules time nothing out on their own — `signal` is the only
+ * way this wait ends early. No redirect following: nothing on the path redirects a POST.
+ */
+function postJson(url: string, payload: string, signal: AbortSignal): Promise<PostResult> {
+	const options: RequestOptions = {
+		method: "POST",
+		headers: { "content-type": "application/json", "content-length": String(Buffer.byteLength(payload)) },
+		signal,
+	};
+	// `settle`, not `resolve`: node:path's resolve is already in this file's scope.
+	return new Promise<PostResult>((settle, reject) => {
+		const onResponse = (res: IncomingMessage): void => {
+			let text = "";
+			res.setEncoding("utf8");
+			res.on("data", (chunk: string) => {
+				text += chunk;
+			});
+			res.on("end", () => settle({ status: res.statusCode ?? 0, text }));
+			res.on("error", reject);
+		};
+		let req: ClientRequest;
+		if (new URL(url).protocol === "https:") {
+			req = httpsRequest(url, options, onResponse);
+		} else {
+			req = httpRequest(url, options, onResponse);
+		}
+		req.on("error", reject);
+		req.end(payload);
+	});
+}
+
+/**
+ * One generation. `signal` is pi's abort: Esc during a long wait has to reach the
+ * request, or the request keeps burning the GPU after the session has moved on.
  */
 async function generate(cfg: Config, args: Args, signal: AbortSignal): Promise<Generated> {
 	const size = parseSize(args.size ?? cfg.size);
@@ -329,29 +385,30 @@ async function generate(cfg: Config, args: Args, signal: AbortSignal): Promise<G
 
 	const started = Date.now();
 	// pi's abort plus a ceiling of our own. Nothing else bounds this wait: pi's
-	// httpIdleTimeoutMs governs provider requests, not a tool's own fetch, and neither
+	// httpIdleTimeoutMs governs provider requests, not a tool's own request, and neither
 	// Caddy nor llama-swap times out an upstream generation.
 	const timeout = AbortSignal.timeout(cfg.timeoutMs);
-	const res = await fetch(url, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify(body),
-		signal: AbortSignal.any([signal, timeout]),
-	}).catch((err: Error) => {
+	const res = await postJson(url, JSON.stringify(body), AbortSignal.any([signal, timeout])).catch((err: Error) => {
 		if (timeout.aborted) {
 			throw new Error(
 				`${cfg.model}: no answer from ${new URL(url).pathname} in ${Math.round(cfg.timeoutMs / MS_PER_SECOND)}s. ` +
 					"The generation may still be running on the box — GET /running on the same host says what is loaded.",
 			);
 		}
-		throw new Error(`${cfg.model}: ${url} — ${err.message}`);
+		// A bare "fetch failed" hid the real cause behind undici's wrapper; node:https
+		// reports ECONNREFUSED and friends directly, and cause stays for whatever wraps.
+		let cause = "";
+		if (err.cause instanceof Error) {
+			cause = ` (${err.cause.message})`;
+		}
+		throw new Error(`${cfg.model}: ${url} — ${err.message}${cause}`);
 	});
 
-	const text = await res.text();
-	if (!res.ok) {
+	const { status, text } = res;
+	if (status < HTTP_OK || status >= HTTP_MULTIPLE_CHOICES) {
 		// sd-server answers {"error":"..."}, llama-swap {"src":"llama-swap","error":{...}}.
 		const detail = text.slice(0, DETAIL_CHARS).replace(WHITESPACE_RUN, " ");
-		throw new Error(`${cfg.model}: HTTP ${res.status} from ${new URL(url).pathname} — ${detail}`);
+		throw new Error(`${cfg.model}: HTTP ${status} from ${new URL(url).pathname} — ${detail}`);
 	}
 
 	let parsed: unknown;

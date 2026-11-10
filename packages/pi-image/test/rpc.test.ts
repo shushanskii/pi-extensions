@@ -6,7 +6,7 @@
 
 import { existsSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
-import { type FakeServer, scriptedModels, startFakeServer } from "../../../tests/fake-server.ts";
+import { type FakeServer, HTTP_OK, scriptedModels, startFakeServer } from "../../../tests/fake-server.ts";
 import { type Home, makeHome } from "../../../tests/home.ts";
 import type { PiEvent } from "../../../tests/pi.ts";
 import { type Pi, startPi } from "../../../tests/rpc.ts";
@@ -146,6 +146,12 @@ function expectedGenerationBody(size: string): Record<string, unknown> {
 	return body;
 }
 
+// The 1×1 PNG the fake server answers with, for a route this test re-registers with a delay.
+// biome-ignore lint/security/noSecrets: a transparent pixel, not a credential
+const TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+/** How long the fake route holds the answer: minutes on the GPU, two seconds here. */
+const GPU_HOLD_MS = 2000;
+
 describe("tool, text-only model", () => {
 	const harness = withPi("text-only");
 
@@ -185,6 +191,23 @@ describe("tool, text-only model", () => {
 		expect(end.isError).toBe(true);
 		expect(end.result?.content?.[0]?.text).toBe("width 300 is not divisible by 32");
 		expect(server.log.filter((r) => r.path !== "/v1/chat/completions")).toEqual([]);
+	});
+
+	test("a response held open is waited out, not timed out", async () => {
+		// The GPU holds the response for minutes and sends the headers with the finished
+		// image; the old fetch transport cut that off at 300s (package header, "Why not
+		// `fetch`"). 2s stands in for the minutes — the point is that holding is not an error.
+		// The keys are the server's vocabulary, hence the field-by-field assignment.
+		const fox: Record<string, unknown> = {};
+		fox.b64_json = TINY_PNG_B64;
+		const held: Record<string, unknown> = { data: [fox] };
+		held.output_format = "png";
+		server.route("/v1/images/generations", HTTP_OK, held, GPU_HOLD_MS);
+		drawAndStop({ size: "256x256" });
+		const end = await toolResult(harness.pi, "a fox behind a slow GPU");
+
+		expect(end.isError).toBe(false);
+		expect(detailsOf(end).route).toBe("images/generations");
 	});
 });
 
