@@ -402,12 +402,17 @@ interface Progress {
 	steps: number;
 	fraction: number;
 	etaSec: number;
+	/** Whether etaSec is a real estimate; the box never fills `eta_relative`, so it is 0 until this file has timed a step. */
+	etaKnown: boolean;
+	/** Sampling is over and the VAE decode runs: the status went back to empty after a step. */
+	decoding: boolean;
 }
 
 /**
  * The A1111-shaped status: `state.sampling_step` of `sampling_steps`, an overall
  * `progress` fraction and `eta_relative` seconds. The keys are the server's vocabulary,
- * so every field is read through a guard rather than trusted.
+ * so every field is read through a guard rather than trusted. `eta_relative` is always 0
+ * on this route (measured 2026-11-10), so the ETA is measured by the tracker below.
  */
 function parseProgress(text: string): Progress | undefined {
 	let parsed: unknown;
@@ -420,21 +425,75 @@ function parseProgress(text: string): Progress | undefined {
 	if (isRecord(parsed)) {
 		({ state } = parsed);
 	}
+	const etaSec = numberField(parsed, "eta_relative") ?? 0;
 	return {
 		step: numberField(state, "sampling_step") ?? 0,
 		steps: numberField(state, "sampling_steps") ?? 0,
 		fraction: numberField(parsed, "progress") ?? 0,
-		etaSec: numberField(parsed, "eta_relative") ?? 0,
+		etaSec,
+		etaKnown: etaSec > 0,
+		decoding: false,
+	};
+}
+
+/**
+ * The ETA the box does not provide, and the decode state it does not report. The status
+ * only moves when a step lands — every ~12s at 1024² — while this polls once a second, so
+ * an ETA derived from the raw fraction would tick up between steps and only fall when one
+ * arrives (the bug this replaces). Instead the seconds a step took are measured from the
+ * step transitions, and between them the line counts down against a fixed finish estimate.
+ * The memory lives here, across polls: when sampling began, the last step seen and when,
+ * and the average a step costs.
+ */
+function createProgressTracker(onProgress: (p: Progress) => void): (p: Progress) => void {
+	let samplingStart = 0;
+	let lastStep = 0;
+	let lastStepAt = 0;
+	let perStepMs = 0;
+	return (p: Progress): void => {
+		const now = Date.now();
+		if (p.steps === 0) {
+			// Empty status: before any step this is load or prompt-encoding; after one it is
+			// the VAE decode. Only the second is worth a distinct line.
+			p.decoding = samplingStart > 0;
+			onProgress(p);
+			return;
+		}
+		if (samplingStart === 0) {
+			samplingStart = now;
+		}
+		if (p.step > lastStep) {
+			let from = samplingStart;
+			if (lastStepAt > 0) {
+				from = lastStepAt;
+			}
+			perStepMs = (now - from) / (p.step - lastStep);
+			lastStep = p.step;
+			lastStepAt = now;
+		}
+		if (perStepMs > 0) {
+			const finishAt = lastStepAt + (p.steps - lastStep) * perStepMs;
+			p.etaSec = Math.max(0, (finishAt - now) / MS_PER_SECOND);
+			p.etaKnown = true;
+		}
+		onProgress(p);
 	};
 }
 
 /** One line of it: what the sampler is on, how far along, and when it should be done. */
 function progressLine(p: Progress): string {
+	if (p.decoding) {
+		return "decoding the latents…";
+	}
 	if (p.steps === 0) {
 		return "waiting: the box is loading weights or encoding the prompt";
 	}
 	const pct = Math.round(p.fraction * PERCENT);
-	return `sampling ${p.step}/${p.steps} · ${pct}% · ETA ${clock(p.etaSec)}`;
+	let eta = "";
+	if (p.etaKnown) {
+		eta = ` · ETA ${clock(p.etaSec)}`;
+	}
+	return `sampling ${p.step}/${p.steps} · ${pct}%${eta}`;
 }
 
 /** Seconds to m:ss — an ETA of 300 should read as 5:00, not as 300. */
@@ -577,12 +636,7 @@ async function generate(
 	let poller: ReturnType<typeof setInterval> | undefined;
 	if (onProgress) {
 		const progressUrl = `${origin}/upstream/${cfg.model}/sdapi/v1/progress`;
-		// sd-server leaves `eta_relative` at 0 on this route (measured 2026-11-10: step
-		// 8/20, progress 0.4, eta 0.0 — its own ETA only reaches stdout), so the ETA is
-		// derived: the time this call has been running, scaled by what the fraction says
-		// is left. A cold start overestimates it at first — load time is in the elapsed —
-		// and it settles as the fraction moves.
-		let lastSteps = 0;
+		const feed = createProgressTracker(onProgress);
 		poller = setInterval(() => {
 			const give = AbortSignal.any([signal, AbortSignal.timeout(PROGRESS_GIVE_MS)]);
 			getJson(progressUrl, give)
@@ -591,24 +645,9 @@ async function generate(
 						return;
 					}
 					const p = parseProgress(r.text);
-					if (!p) {
-						return;
+					if (p) {
+						feed(p);
 					}
-					if (p.steps > 0) {
-						lastSteps = p.steps;
-					} else if (lastSteps > 0) {
-						// The status went back to empty after sampling: the frame is sampled and
-						// the VAE decode is running. Hold the line at done rather than rewind
-						// to "waiting", which would read as a restart.
-						p.step = lastSteps;
-						p.steps = lastSteps;
-						p.fraction = 1;
-					}
-					if (p.fraction > 0 && p.etaSec <= 0) {
-						const done = p.fraction;
-						p.etaSec = ((Date.now() - started) / MS_PER_SECOND) * ((1 - done) / done);
-					}
-					onProgress(p);
 				})
 				.catch(() => undefined);
 		}, PROGRESS_POLL_MS);
