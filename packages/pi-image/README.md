@@ -1,6 +1,7 @@
 # pi-image
 
-The lab's qwen-image as a tool the model can call.
+The lab's qwen-image as a tool the model can call: draw from a prompt, edit a picture by
+reference (`image`), or repaint inside a mask (`initImage`, `mask`, `strength`).
 
 ```bash
 pi install npm:@shushanskii/pi-image

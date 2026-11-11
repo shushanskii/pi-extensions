@@ -4,7 +4,8 @@
  * event stream and what pi sent the model on the next turn.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { type FakeServer, HTTP_OK, scriptedModels, startFakeServer } from "../../../tests/fake-server.ts";
 import { type Home, makeHome } from "../../../tests/home.ts";
@@ -169,10 +170,23 @@ function expectedSdapiBody(): Record<string, unknown> {
 const TINY_PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 /** How long the fake route holds the answer: minutes on the GPU, two seconds here. */
 const GPU_HOLD_MS = 2000;
+/**
+ * A picture on disk for the editing parameters to point at — the same 1×1 PNG the fake
+ * server answers with, so a test can compare what was sent against what was written.
+ */
+function inputPicture(name: string): string {
+	const dir = join(home.dir, "inputs");
+	mkdirSync(dir, { recursive: true });
+	const file = join(dir, name);
+	writeFileSync(file, Buffer.from(TINY_PNG_B64, "base64"));
+	return file;
+}
 /** Longer than the poller's first tick, so an update lands before the held answer does. */
 const LONG_HOLD_MS = 3000;
 /** How long the abort test lets the generation run before pulling the plug. */
 const ABORT_AFTER_MS = 1500;
+/** A repaint strength in the middle of the useful range: asked for, and expected back. */
+const STRENGTH = 0.8;
 /** The SDAPI answer for a route the test holds open: the server's key goes in by field. */
 function heldAnswer(): Record<string, unknown> {
 	const held: Record<string, unknown> = {};
@@ -239,6 +253,56 @@ describe("tool, text-only model", () => {
 		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject({
 			lora: [{ path: "author/style.safetensors", multiplier: 1 }],
 		});
+	});
+
+	test("a reference image rides the SDAPI body as extra_images", async () => {
+		drawAndStop({ size: "256x256", image: [inputPicture("fox.png")] });
+		const end = await toolResult(harness.pi, "move the fox to a desert");
+
+		// A reference is still a txt2img call: the picture is something the model looks at,
+		// not something it repaints (package header, "Why editing is two fields and not one").
+		expect(detailsOf(end).route).toBe("sdapi/txt2img");
+		// The wire keys are the server's vocabulary, so they go in field by field.
+		const sent: Record<string, unknown> = {};
+		sent.extra_images = [TINY_PNG_B64];
+		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject(sent);
+		expect(end.result?.content?.[0]?.text).toContain("1 reference image");
+	});
+
+	test("a picture to repaint moves the request to img2img, mask and strength along", async () => {
+		drawAndStop({
+			size: "256x256",
+			initImage: inputPicture("fox.png"),
+			mask: inputPicture("mask.png"),
+			strength: STRENGTH,
+		});
+		const end = await toolResult(harness.pi, "snow where the right side is");
+
+		expect(detailsOf(end).route).toBe("sdapi/img2img");
+		const sent: Record<string, unknown> = {};
+		sent.init_images = [TINY_PNG_B64];
+		sent.mask = TINY_PNG_B64;
+		sent.denoising_strength = STRENGTH;
+		expect(server.log.find((r) => r.path === "/sdapi/v1/img2img")?.body).toMatchObject(sent);
+		expect(end.result?.content?.[0]?.text).toContain(`repainting inside a mask at strength ${STRENGTH}`);
+	});
+
+	test("a mask with no picture to repaint is an error, and nothing is posted", async () => {
+		drawAndStop({ size: "256x256", mask: inputPicture("mask.png") });
+		const end = await toolResult(harness.pi, "a mask on nothing");
+
+		expect(end.isError).toBe(true);
+		expect(end.result?.content?.[0]?.text).toContain("mask needs initImage");
+		expect(server.log.filter((r) => r.path !== "/v1/chat/completions")).toEqual([]);
+	});
+
+	test("a picture that cannot be read names the parameter and the file", async () => {
+		drawAndStop({ size: "256x256", initImage: join(home.dir, "nowhere.png") });
+		const end = await toolResult(harness.pi, "repaint a missing file");
+
+		expect(end.isError).toBe(true);
+		expect(end.result?.content?.[0]?.text).toContain("initImage: cannot read");
+		expect(end.result?.content?.[0]?.text).toContain("nowhere.png");
 	});
 
 	test("a size the model cannot draw is an error, and nothing is posted", async () => {

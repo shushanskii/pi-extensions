@@ -176,10 +176,11 @@ export function scriptedModels(url: string) {
 	};
 }
 
-/** The two image routes pi-image knows, answering with one PNG each by default. */
+/** The three image routes pi-image knows, answering with one PNG each by default. */
 export const IMAGE_ROUTES: Record<string, Route> = {
 	"/v1/images/generations": { status: HTTP_OK, body: openAiImageAnswer() },
 	"/sdapi/v1/txt2img": { status: HTTP_OK, body: { images: [PNG_1X1] } },
+	"/sdapi/v1/img2img": { status: HTTP_OK, body: { images: [PNG_1X1] } },
 };
 
 export async function startFakeServer(): Promise<FakeServer> {

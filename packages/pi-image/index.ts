@@ -40,6 +40,29 @@
  * (stable-diffusion.cpp#2051); the "Only (X / Y) LoRA tensors have been applied" line
  * in the server log is the check, and this tool cannot see it.
  *
+ * Why editing is two fields and not one. The server edits in two unrelated ways, and a
+ * caller has to pick which one it means. A reference image (`image`) is looked at: it
+ * goes through the Qwen3-VL vision tower and the DiT, and the prompt names the change —
+ * measured 2026-11-11, a 768x1024 reference at 512x672/20 in 56.4 s kept the face, the
+ * pose and the lit strip on the jacket and replaced the street behind it. An init image
+ * (`initImage`, with an optional `mask` and `strength`) is repainted where it stands:
+ * the blend is `denoised * mask + init_latent * (1 - mask)` on every step, so what is
+ * outside the mask came back visually unchanged (measured the same day, 37.2 s warm).
+ * The first needs `--llm_vision` on the server and answers "Qwen Image 2.1 editing
+ * requires Qwen3-VL vision weights" without it; the second needs nothing a plain
+ * generation does not already load. Both ride SDAPI — `extra_images` on either
+ * endpoint, `init_images` and `mask` on img2img — so an edit is never the OpenAI shape,
+ * and the progress line survives it. Two traps belong to the caller: a reference's sides
+ * have to be multiples of 32, and a mask's edge is hard because nothing feathers it on
+ * this path, so a soft blend means blurring the mask before sending it.
+ *
+ * Which of the two a caller means is not readable from a sentence like "repaint the bottle
+ * red", and a model left to choose picks the mask and then spends the session segmenting
+ * pixels in code without ever reaching this call — observed 2026-11-11: 14 tool calls,
+ * nine of them threshold tuning in PIL, two dead scripts, no generation at all. So the
+ * guidelines name the reference path as the edit path and keep `mask` for an area
+ * somebody already marked.
+ *
  * Why the progress poll goes through /upstream/. sd-server reports sampling on
  * /sdapi/v1/progress, but llama-swap forwards txt2img, img2img and loras only, so the
  * poll takes the raw upstream route — and that route starts an unloaded model, 10 GiB
@@ -144,6 +167,11 @@ const SLUG_MAX = 40;
 const DETAIL_CHARS = 400;
 const PREVIEW_CHARS = 160;
 const BYTES_PER_KIB = 1024;
+// An input picture is read whole and base64'd into one JSON body. A wrong path — a video,
+// a directory, a stray multi-gigabyte file — is stopped here with the file named, rather
+// than three seconds later inside whatever the server answered. 32768 KiB is 32 MiB.
+const MAX_INPUT_IMAGE_KIB = 32_768;
+const MAX_INPUT_IMAGE_BYTES = MAX_INPUT_IMAGE_KIB * BYTES_PER_KIB;
 const MS_PER_SECOND = 1000;
 // The editor widget refreshes once a second: a generation takes tens of seconds, and a
 // counter that moved every 100 ms would only make the wait look longer.
@@ -332,6 +360,28 @@ function stamp(): string {
 	return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+/**
+ * One input picture, read and base64'd the way the server wants it. `label` is the
+ * parameter the model set, so the message names the field to fix rather than the byte
+ * offset where the read failed.
+ */
+function readImage(label: string, path: string): string {
+	const file = resolve(expand(path));
+	let bytes: Buffer;
+	try {
+		bytes = readFileSync(file);
+	} catch (raw: unknown) {
+		const err = raw as Error;
+		throw new Error(`${label}: cannot read ${file} (${err.message})`, { cause: raw });
+	}
+	if (bytes.length === 0 || bytes.length > MAX_INPUT_IMAGE_BYTES) {
+		throw new Error(
+			`${label}: ${file} is ${bytes.length} bytes; expected a picture between 1 and ${MAX_INPUT_IMAGE_KIB / BYTES_PER_KIB} MiB`,
+		);
+	}
+	return bytes.toString("base64");
+}
+
 interface Args {
 	prompt: string;
 	size?: string;
@@ -342,6 +392,10 @@ interface Args {
 	seed?: number;
 	negativePrompt?: string;
 	lora?: { path: string; weight?: number }[];
+	image?: string[];
+	initImage?: string;
+	mask?: string;
+	strength?: number;
 	open?: boolean;
 }
 
@@ -552,9 +606,26 @@ async function generate(
 	// is the route the progress poll can report on. The OpenAI shape stays for the one
 	// thing only it does — jpeg and webp output — and the progress line then stays at
 	// "waiting", which the format parameter's description tells the model.
+	const refs = args.image ?? [];
+	// A mask says which part of a picture may change. With no picture to change it says
+	// nothing: a txt2img call has no init latent for the outside of the mask to keep.
+	if (args.mask !== undefined && args.initImage === undefined) {
+		throw new Error("mask needs initImage: a mask marks the part of a picture to repaint, and no picture was given.");
+	}
+	const repaint = args.initImage !== undefined;
+	let strength: number | undefined;
+	if (args.strength !== undefined) {
+		// Clamped here so the echo states what the server was told; the server clamps too.
+		strength = Math.min(1, Math.max(0, args.strength));
+	}
 	const format = args.format ?? cfg.format;
 	const knobs =
-		args.steps !== undefined || args.seed !== undefined || Boolean(args.negativePrompt) || Boolean(args.lora?.length);
+		args.steps !== undefined ||
+		args.seed !== undefined ||
+		Boolean(args.negativePrompt) ||
+		Boolean(args.lora?.length) ||
+		refs.length > 0 ||
+		repaint;
 	const api = cfg.baseUrl.replace(TRAILING_SLASH, "");
 	const origin = originOf(cfg);
 	// `negative_prompt`, `cfg_scale`, `batch_size` and `output_format` are the server's
@@ -564,7 +635,11 @@ async function generate(
 	let url: string;
 	let route: string;
 	if (format === "png" || knobs) {
-		url = `${origin}/sdapi/v1/txt2img`;
+		let endpoint = "txt2img";
+		if (repaint) {
+			endpoint = "img2img";
+		}
+		url = `${origin}/sdapi/v1/${endpoint}`;
 		body.width = size.width;
 		body.height = size.height;
 		body.steps = steps;
@@ -575,7 +650,21 @@ async function generate(
 		if (args.lora?.length) {
 			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: l.weight ?? 1 }));
 		}
-		route = "sdapi/txt2img";
+		if (args.initImage !== undefined) {
+			body.init_images = [readImage("initImage", args.initImage)];
+			if (args.mask !== undefined) {
+				body.mask = readImage("mask", args.mask);
+			}
+			// Left out rather than defaulted: the server keeps its own strength for a call
+			// that names none, and a number invented here would be this file's guess.
+			if (strength !== undefined) {
+				body.denoising_strength = strength;
+			}
+		}
+		if (refs.length > 0) {
+			body.extra_images = refs.map((p, i) => readImage(`image[${i}]`, p));
+		}
+		route = `sdapi/${endpoint}`;
 	} else {
 		url = `${api}/images/generations`;
 		body.n = n;
@@ -695,13 +784,30 @@ async function generate(
 		// The echo follows the route that answered, not the knobs: a plain call rides SDAPI
 		// too now, and its line has to say what SDAPI was told.
 		let echo: string;
-		if (route === "sdapi/txt2img") {
+		if (route === "images/generations") {
+			echo = `size ${size.width}x${size.height}, ${produced}`;
+		} else {
 			echo = `steps ${steps}, cfg ${cfg.cfgScale}, seed ${seed}`;
 			if (args.lora?.length) {
 				echo += `, lora ${args.lora.map((l) => `${basename(l.path)}@${l.weight ?? 1}`).join(", ")}`;
 			}
-		} else {
-			echo = `size ${size.width}x${size.height}, ${produced}`;
+			if (route === "sdapi/img2img") {
+				let how = "repainting";
+				if (args.mask !== undefined) {
+					how += " inside a mask";
+				}
+				if (strength !== undefined) {
+					how += ` at strength ${strength}`;
+				}
+				echo += `, ${how}`;
+			}
+			if (refs.length > 0) {
+				let noun = "reference images";
+				if (refs.length === 1) {
+					noun = "reference image";
+				}
+				echo += `, ${refs.length} ${noun}`;
+			}
 		}
 
 		let base: string;
@@ -748,8 +854,9 @@ export default function (pi: ExtensionAPI) {
 		name: "generate_image",
 		label: "Image",
 		description:
-			"Draw a picture with the lab's qwen-image and save it to a file. Describe the scene plainly; " +
-			"one image per call. The result names the file and shows the picture back to you.",
+			"Draw a picture with the lab's qwen-image and save it to a file, or edit a picture you " +
+			"already have. Describe the scene plainly; one image per call. The result names the file " +
+			"and shows the picture back to you.",
 		promptSnippet: "Draw a picture with the lab's qwen-image and save it to a file",
 		promptGuidelines: [
 			"generate_image is slow and shares the box with the model you are running: expect ~1 minute at 512x512 " +
@@ -758,6 +865,13 @@ export default function (pi: ExtensionAPI) {
 			"Say what is in the frame, the medium and the light. Leave steps alone unless the picture is almost " +
 				"right: 20 is the server default and 4 does not resolve this model at all. Measured here: " +
 				"256x256/20 = 19s, 512x512/20 = 57s.",
+			"To change a picture that already exists, pass it in `image` and name the change in the prompt — " +
+				"that is the edit path, and one call is enough. Do not write code to segment the picture first: " +
+				"building a mask by hand costs more turns than the edit itself and usually fails on a photo.",
+			"`mask` is for an area somebody already marked — a mask file the caller was handed, or a region it " +
+				"was told to paint — not for marking one out itself. Sizes: both sides of a reference and of " +
+				"initImage must divide by 32, so resize before sending (`sips -z 704 544 file` on macOS); the " +
+				"server rejects an odd size only after the model is loaded, which is the expensive order.",
 		],
 		parameters: Type.Object({
 			prompt: Type.String({ description: "What to draw: subject, medium, light. English works best." }),
@@ -794,6 +908,29 @@ export default function (pi: ExtensionAPI) {
 					}),
 					{ description: "LoRA files from the server's catalog to apply to this generation." },
 				),
+			),
+			image: Type.Optional(
+				Type.Array(Type.String({ description: "One picture on this machine — an absolute path or ~/..." }), {
+					description:
+						"Reference images the model looks at while it applies the change the prompt names — this is how an existing picture is edited. Both sides divisible by 32. Needs the server's vision weights, or the call fails.",
+				}),
+			),
+			initImage: Type.Optional(
+				Type.String({
+					description:
+						"A picture on this machine to repaint where it stands, instead of drawing from words. With mask, only the marked area changes.",
+				}),
+			),
+			mask: Type.Optional(
+				Type.String({
+					description:
+						"A black-and-white picture the size of initImage: white may change, black stays as it is. Only for an area that is already marked — drawing one is a bigger job than the edit. The edge is hard, so blur the mask first for a soft blend.",
+				}),
+			),
+			strength: Type.Optional(
+				Type.Number({
+					description: "How much of initImage to overwrite, 0..1. The server's own default applies when unset.",
+				}),
 			),
 			open: Type.Optional(Type.Boolean({ description: "Open the finished file in the OS viewer." })),
 		}),
