@@ -220,6 +220,27 @@ describe("tool, text-only model", () => {
 		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject({ seed: 7, steps: 20 });
 	});
 
+	test("a lora rides the SDAPI body as a structured field, weight spelled multiplier", async () => {
+		drawAndStop({ size: "256x256", lora: [{ path: "f23gg/NSFW-Qwen-Lora.safetensors", weight: 0.8 }] });
+		const end = await toolResult(harness.pi, "the fox with a lora");
+
+		expect(detailsOf(end).route).toBe("sdapi/txt2img");
+		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject({
+			lora: [{ path: "f23gg/NSFW-Qwen-Lora.safetensors", multiplier: 0.8 }],
+		});
+		// The echo names the applied file, so the model can see which lora the server was told about.
+		expect(end.result?.content?.[0]?.text).toContain("lora NSFW-Qwen-Lora.safetensors@0.8");
+	});
+
+	test("a lora without a weight asks for the whole thing", async () => {
+		drawAndStop({ size: "256x256", lora: [{ path: "author/style.safetensors" }] });
+		await toolResult(harness.pi, "the fox again");
+
+		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject({
+			lora: [{ path: "author/style.safetensors", multiplier: 1 }],
+		});
+	});
+
 	test("a size the model cannot draw is an error, and nothing is posted", async () => {
 		drawAndStop({ size: "300x300" });
 		const end = await toolResult(harness.pi, "a fox at an odd size");

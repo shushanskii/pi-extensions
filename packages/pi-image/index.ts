@@ -31,6 +31,15 @@
  * that call then has no progress line. Both answer with base64; SDAPI always answers
  * with PNG whatever `format` says.
  *
+ * Why LoRA is a path and not a file. The server keeps a catalog: llama-swap.yaml points
+ * sd-server at `--lora-model-dir`, and a request names entries by path inside it — the
+ * `<lora:name:weight>` prompt syntax is deliberately not parsed by the server APIs, and
+ * absolute paths or paths escaping that directory are rejected. `weight` is spelled
+ * `multiplier` on the wire because that is the server's field name. One caveat travels
+ * with this on Qwen-Image-2.1: community LoRAs can apply only partially upstream
+ * (stable-diffusion.cpp#2051); the "Only (X / Y) LoRA tensors have been applied" line
+ * in the server log is the check, and this tool cannot see it.
+ *
  * Why the progress poll goes through /upstream/. sd-server reports sampling on
  * /sdapi/v1/progress, but llama-swap forwards txt2img, img2img and loras only, so the
  * poll takes the raw upstream route — and that route starts an unloaded model, 10 GiB
@@ -76,7 +85,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { type ClientRequest, request as httpRequest, type IncomingMessage } from "node:http";
 import { request as httpsRequest, type RequestOptions } from "node:https";
 import { homedir, tmpdir } from "node:os";
-import { dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { defineTool, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -332,6 +341,7 @@ interface Args {
 	steps?: number;
 	seed?: number;
 	negativePrompt?: string;
+	lora?: { path: string; weight?: number }[];
 	open?: boolean;
 }
 
@@ -543,7 +553,8 @@ async function generate(
 	// thing only it does — jpeg and webp output — and the progress line then stays at
 	// "waiting", which the format parameter's description tells the model.
 	const format = args.format ?? cfg.format;
-	const knobs = args.steps !== undefined || args.seed !== undefined || Boolean(args.negativePrompt);
+	const knobs =
+		args.steps !== undefined || args.seed !== undefined || Boolean(args.negativePrompt) || Boolean(args.lora?.length);
 	const api = cfg.baseUrl.replace(TRAILING_SLASH, "");
 	const origin = originOf(cfg);
 	// `negative_prompt`, `cfg_scale`, `batch_size` and `output_format` are the server's
@@ -561,6 +572,9 @@ async function generate(
 		body.negative_prompt = args.negativePrompt ?? "";
 		body.cfg_scale = cfg.cfgScale;
 		body.batch_size = n;
+		if (args.lora?.length) {
+			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: l.weight ?? 1 }));
+		}
 		route = "sdapi/txt2img";
 	} else {
 		url = `${api}/images/generations`;
@@ -683,6 +697,9 @@ async function generate(
 		let echo: string;
 		if (route === "sdapi/txt2img") {
 			echo = `steps ${steps}, cfg ${cfg.cfgScale}, seed ${seed}`;
+			if (args.lora?.length) {
+				echo += `, lora ${args.lora.map((l) => `${basename(l.path)}@${l.weight ?? 1}`).join(", ")}`;
+			}
 		} else {
 			echo = `size ${size.width}x${size.height}, ${produced}`;
 		}
@@ -751,7 +768,7 @@ export default function (pi: ExtensionAPI) {
 			format: Type.Optional(
 				Type.String({
 					description:
-						"png (default), jpeg or webp. jpeg and webp lose the progress line and are ignored when steps/seed/negativePrompt are set.",
+						"png (default), jpeg or webp. jpeg and webp lose the progress line and are ignored when steps/seed/negativePrompt/lora are set.",
 				}),
 			),
 			path: Type.Optional(
@@ -764,6 +781,20 @@ export default function (pi: ExtensionAPI) {
 			),
 			seed: Type.Optional(Type.Number({ description: "Fix the seed to repeat or vary one composition." })),
 			negativePrompt: Type.Optional(Type.String({ description: "What to push away from." })),
+			lora: Type.Optional(
+				Type.Array(
+					Type.Object({
+						path: Type.String({
+							description:
+								'The LoRA file inside the server\'s loras directory, subfolders included — "author/style.safetensors". Not a local path.',
+						}),
+						weight: Type.Optional(
+							Type.Number({ description: "How strongly to apply it; 0.6..1.0 is the usual range. Default 1." }),
+						),
+					}),
+					{ description: "LoRA files from the server's catalog to apply to this generation." },
+				),
+			),
 			open: Type.Optional(Type.Boolean({ description: "Open the finished file in the OS viewer." })),
 		}),
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false, idempotentHint: false },
