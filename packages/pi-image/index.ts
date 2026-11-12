@@ -186,6 +186,13 @@ const SEED_SERVER_PICKS = -1;
 // success and the last one a generation must not be.
 const HTTP_OK = 200;
 const HTTP_MULTIPLE_CHOICES = 300;
+// A 502 or 503 from the gateway means there was no upstream to answer, and such an answer
+// carries no body to quote. Measured 2026-11-12: two reference images at 1920x1088 peaked
+// llama-swap at 12.7 GiB, the kernel killed it (it holds OOMScoreAdjust=1000 so it dies
+// before the engine), the call in flight got 502 and the retry five seconds later got 503
+// while systemd was bringing the service back.
+const HTTP_BAD_GATEWAY = 502;
+const HTTP_UNAVAILABLE = 503;
 // The poll is a courtesy to whoever watches the block: one second is finer than the
 // sampler's own pace and cheap enough to ignore.
 const PROGRESS_POLL_MS = 1000;
@@ -757,7 +764,13 @@ async function generate(
 		const { status, text } = res;
 		if (status < HTTP_OK || status >= HTTP_MULTIPLE_CHOICES) {
 			// sd-server answers {"error":"..."}, llama-swap {"src":"llama-swap","error":{...}}.
-			const detail = text.slice(0, DETAIL_CHARS).replace(WHITESPACE_RUN, " ");
+			let detail = text.slice(0, DETAIL_CHARS).replace(WHITESPACE_RUN, " ");
+			// Only when there is nothing to quote: a 503 that says "model is loading" is worth its
+			// own text, and a gateway that lost its upstream answers with an empty body.
+			if (detail === "" && (status === HTTP_BAD_GATEWAY || status === HTTP_UNAVAILABLE)) {
+				detail =
+					"the gateway had no upstream to answer — the box was likely killed or restarting; retry at a smaller size";
+			}
 			throw new Error(`${cfg.model}: HTTP ${status} from ${new URL(url).pathname} — ${detail}`);
 		}
 
@@ -872,6 +885,13 @@ export default function (pi: ExtensionAPI) {
 				"was told to paint — not for marking one out itself. Sizes: both sides of a reference and of " +
 				"initImage must divide by 32, so resize before sending (`sips -z 704 544 file` on macOS); the " +
 				"server rejects an odd size only after the model is loaded, which is the expensive order.",
+			"A reference is re-rendered, not patched: the frame can re-crop or shift even when the subject " +
+				"survives. Name the framing in the prompt (wide 16:9, camera distance, what must stay at the " +
+				"edges) and pass a size close to the source — measured 2026-11-12, the same edit came back " +
+				"square and cropped at the default 1024x1024, and exact at 736x416 with the framing named.",
+			"Every reference adds its own latents, so the cost is the output area times the pictures in it. " +
+				"Two references at 1920x1088 killed the server outright (12.7 GiB peak, then 502). Keep one " +
+				"reference at or below 1024x1024 and two near 1024x576.",
 		],
 		parameters: Type.Object({
 			prompt: Type.String({ description: "What to draw: subject, medium, light. English works best." }),

@@ -14,6 +14,8 @@ import { type Pi, startPi } from "../../../tests/rpc.ts";
 
 /** A route that refuses is part of the script, not a constant of this file's own. */
 const HTTP_SERVICE_UNAVAILABLE = 503;
+/** What the gateway answers when its upstream died mid-request: this body is empty. */
+const HTTP_BAD_GATEWAY = 502;
 /** How long a scripted turn may take before the driver gives up on it. */
 const TURN_WAIT_MS = 15_000;
 
@@ -324,6 +326,17 @@ describe("tool, text-only model", () => {
 
 		expect(end.isError).toBe(false);
 		expect(detailsOf(end).route).toBe("sdapi/txt2img");
+	});
+
+	test("a gateway that lost the box names the box, not an empty body", async () => {
+		// Measured 2026-11-12: a generation that outgrew the host got llama-swap OOM-killed, the
+		// call in flight answered 502 with nothing to quote, and the caller had no clue to act on.
+		server.route("/sdapi/v1/txt2img", HTTP_BAD_GATEWAY, undefined);
+		drawAndStop({ size: "256x256" });
+		const end = await toolResult(harness.pi, "a fox while the box is down");
+
+		expect(end.isError).toBe(true);
+		expect(end.result?.content?.[0]?.text).toContain("no upstream to answer");
 	});
 
 	test("progress streams to the block while the box is busy", async () => {
