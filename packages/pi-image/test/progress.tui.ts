@@ -44,7 +44,7 @@ test("the block shows the sampling progress while the tool runs", async () => {
 	const status: Record<string, unknown> = { state };
 	status.progress = PROGRESS_FRACTION;
 	status.eta_relative = PROGRESS_ETA_SEC;
-	server.route("/upstream/qwen-image/sdapi/v1/progress", HTTP_OK, status);
+	server.route("/upstream/qwen-image-turbo/sdapi/v1/progress", HTTP_OK, status);
 	server.route("/sdapi/v1/txt2img", HTTP_OK, IMAGE_ROUTES["/sdapi/v1/txt2img"]?.body, HOLD_MS);
 	server.script({ tool: "generate_image", args: { prompt: "a red fox", size: "256x256" } }, { text: "done" });
 

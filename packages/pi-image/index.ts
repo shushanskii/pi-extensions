@@ -69,13 +69,25 @@
  * for one status line (measured 2026-11-10). So the poller lives exactly as long as
  * this tool's own generation: while a POST is in flight the model is loaded by
  * definition, and a poll can only report on work already running. Without a watcher the
- * wait is silent, and the figures the guidelines quote are from this box: 19s at 256²/20
+ * wait is silent, and the figures the guidelines quote are from this box on `qwen-image`:
+ * 19s at 256²/20
  * steps, 57s at 512²/20, and the first call after five idle minutes also pays the weight
  * load, because the ttl in llama-swap.yaml is 300. 1024²/20, the configured default and
  * therefore the usual request, was measured through this tool on 2026-11-02 at 337s and
  * 329s, two calls back to back: 5.8× the 512² wait, not the 4× its latent count
  * predicts, so the extra is the sampler rather than a weight load the second call
- * skipped. The default request is a five-minute wait.
+ * skipped.
+ *
+ * Why the default model is `qwen-image-turbo` since 1.4.0. llama-swap carries two entries
+ * over the same VAE, text encoder and vision projector: `qwen-image` (Q4_K_M, started at 20
+ * steps and CFG 6) and `qwen-image-turbo` (Q8_0 distilled for 8 steps at CFG 1, its fixed
+ * sigma schedule passed as --sigmas). Measured 2026-11-12 on the SDAPI route at 512x672/20
+ * CFG 6: 25.6s on the turbo against the 57s the plain model takes, and 1024²/20 in 101.4s
+ * against 337s — a third of the wait for a picture that reads the same, so the fast one is
+ * the default. The tool always sends `steps` and `cfg_scale`, so the entry's own 8 steps
+ * and CFG 1 reach only callers that omit them; at CFG 6 the turbo came out slightly crisper
+ * in texture and at CFG 1 slightly softer, neither broken, so this file does not second-
+ * guess the CFG of a model it did not configure.
  *
  * Config: ~/.pi/agent/image.json — the same directory and plaintext convention as
  * tts.json. `/image test` proves both routes, one after the other on the one GPU, for
@@ -144,7 +156,7 @@ interface Config {
 
 const DEFAULTS: Config = {
 	baseUrl: "https://llm.rezolver-zero.com/v1",
-	model: "qwen-image",
+	model: "qwen-image-turbo",
 	size: "1024x1024",
 	format: "png",
 	cfgScale: 6.0,
@@ -176,8 +188,9 @@ const MS_PER_SECOND = 1000;
 // The editor widget refreshes once a second: a generation takes tens of seconds, and a
 // counter that moved every 100 ms would only make the wait look longer.
 const TICK_MS = 1000;
-// The server's own default; 4 steps came back as noise on this model, which is why the tool
-// description tells the model not to lower it.
+// What the tool sends when the caller names no steps. 4 came back as noise on `qwen-image`
+// (measured 2026-10-16); `qwen-image-turbo` is distilled for 8 and nothing below that has
+// been tried here, so the number stays where the plain model proved good.
 const DEFAULT_STEPS = 20;
 // -1 is SDAPI's "pick one", so the default seed is a value rather than an absence.
 const SEED_SERVER_PICKS = -1;
@@ -872,12 +885,13 @@ export default function (pi: ExtensionAPI) {
 			"and shows the picture back to you.",
 		promptSnippet: "Draw a picture with the lab's qwen-image and save it to a file",
 		promptGuidelines: [
-			"generate_image is slow and shares the box with the model you are running: expect ~1 minute at 512x512 " +
-				"and minutes at 1024x1024, plus a weight load on the first call after five idle minutes. Ask once, " +
-				"look at the result, then refine — do not fire a batch of guesses.",
-			"Say what is in the frame, the medium and the light. Leave steps alone unless the picture is almost " +
-				"right: 20 is the server default and 4 does not resolve this model at all. Measured here: " +
-				"256x256/20 = 19s, 512x512/20 = 57s.",
+			"generate_image shares the box with the model you are running: on the default qwen-image-turbo expect " +
+				"~25s at 512x672 and ~100s at 1024x1024, on qwen-image about three times that, plus a weight load " +
+				"on the first call after five idle minutes. Ask once, look at the result, then refine — do not " +
+				"fire a batch of guesses.",
+			"Say what is in the frame, the medium and the light. Leave steps alone: 20 resolves both models and " +
+				"4 came back as noise on qwen-image. Measured on the turbo: 512x672/20 = 25.6s, /8 = 14.1s, " +
+				"1024x1024/20 = 101.4s.",
 			"To change a picture that already exists, pass it in `image` and name the change in the prompt — " +
 				"that is the edit path, and one call is enough. Do not write code to segment the picture first: " +
 				"building a mask by hand costs more turns than the edit itself and usually fails on a photo.",
@@ -910,7 +924,8 @@ export default function (pi: ExtensionAPI) {
 			),
 			steps: Type.Optional(
 				Type.Number({
-					description: "Sampling steps. The server default is 20, and that is the floor: 4 steps came back as noise.",
+					description:
+						"Sampling steps. The tool sends 20; the turbo entry is built for 8, and 4 steps came back as noise on qwen-image.",
 				}),
 			),
 			seed: Type.Optional(Type.Number({ description: "Fix the seed to repeat or vary one composition." })),

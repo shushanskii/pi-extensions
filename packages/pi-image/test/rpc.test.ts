@@ -97,7 +97,7 @@ describe("commands, no model", () => {
 	test("/image config reports the config from the isolated HOME", async () => {
 		await harness.pi.client.prompt("/image config");
 		const notice = await harness.pi.waitForUi((r) => r.method === "notify");
-		expect(notice.message).toBe(`image: ${server.url}/v1 · qwen-image · 1024x1024 · ${home.dir}/pictures`);
+		expect(notice.message).toBe(`image: ${server.url}/v1 · qwen-image-turbo · 1024x1024 · ${home.dir}/pictures`);
 	});
 
 	test("/image test walks both routes and keeps a widget line for each", async () => {
@@ -131,7 +131,7 @@ describe("commands, no model", () => {
 		expect(server.log.map((r) => r.path)).toEqual(["/v1/images/generations"]);
 		const last = harness.pi.ui.filter((r) => r.method === "setWidget").at(-1)?.widgetLines;
 		expect(last).toEqual([
-			'image: ✗ 1/2 images/generations — qwen-image: HTTP 503 from /v1/images/generations — {"error":"model is loading"}',
+			'image: ✗ 1/2 images/generations — qwen-image-turbo: HTTP 503 from /v1/images/generations — {"error":"model is loading"}',
 		]);
 	});
 });
@@ -154,7 +154,7 @@ const DEFAULT_CFG_SCALE = 6;
 /** The body pi-image posts on the SDAPI route for the plain 256² call of these tests. */
 function expectedSdapiBody(): Record<string, unknown> {
 	const body: Record<string, unknown> = {
-		model: "qwen-image",
+		model: "qwen-image-turbo",
 		prompt: "a red fox",
 		width: 256,
 		height: 256,
@@ -197,7 +197,7 @@ function heldAnswer(): Record<string, unknown> {
 }
 /** llama-swap's /running answer with the image model loaded. */
 function runningWithModel(): Record<string, unknown> {
-	return { running: [{ model: "qwen-image" }] };
+	return { running: [{ model: "qwen-image-turbo" }] };
 }
 /** The fixed status the fake progress route reports: step 10 of 20, half done, ten seconds left. */
 const PROGRESS_STEP = 10;
@@ -347,7 +347,7 @@ describe("tool, text-only model", () => {
 		const status: Record<string, unknown> = { state };
 		status.progress = PROGRESS_FRACTION;
 		status.eta_relative = PROGRESS_ETA_SEC;
-		server.route("/upstream/qwen-image/sdapi/v1/progress", HTTP_OK, status);
+		server.route("/upstream/qwen-image-turbo/sdapi/v1/progress", HTTP_OK, status);
 		// Held longer than the poller's first tick, so at least one update precedes the end.
 		server.route("/sdapi/v1/txt2img", HTTP_OK, heldAnswer(), LONG_HOLD_MS);
 		drawAndStop({ size: "256x256" });
@@ -363,13 +363,13 @@ describe("tool, text-only model", () => {
 
 	test("cancel_generate_image unloads a running model", async () => {
 		server.route("/running", HTTP_OK, runningWithModel());
-		server.route("/api/models/unload/qwen-image", HTTP_OK, "OK");
+		server.route("/api/models/unload/qwen-image-turbo", HTTP_OK, "OK");
 		server.script({ tool: "cancel_generate_image", args: {} }, { text: "stopped" });
 		const end = await toolResult(harness.pi, "stop the picture");
 
 		expect(end.isError).toBe(false);
-		expect(end.result?.content?.[0]?.text).toContain("unloaded qwen-image");
-		expect(server.log.map((r) => r.path)).toContain("/api/models/unload/qwen-image");
+		expect(end.result?.content?.[0]?.text).toContain("unloaded qwen-image-turbo");
+		expect(server.log.map((r) => r.path)).toContain("/api/models/unload/qwen-image-turbo");
 	});
 
 	test("cancel is a no-op when nothing runs", async () => {
@@ -378,14 +378,14 @@ describe("tool, text-only model", () => {
 		const end = await toolResult(harness.pi, "stop nothing");
 
 		expect(end.result?.content?.[0]?.text).toContain("nothing to cancel");
-		expect(server.log.map((r) => r.path)).not.toContain("/api/models/unload/qwen-image");
+		expect(server.log.map((r) => r.path)).not.toContain("/api/models/unload/qwen-image-turbo");
 	});
 
 	test("aborting the call tells llama-swap to stop the box", async () => {
 		// The box keeps sampling after its client dies (package header, "Why cancel
 		// unloads"), so the abort branch of generate() must reach the unload route.
 		server.route("/running", HTTP_OK, runningWithModel());
-		server.route("/api/models/unload/qwen-image", HTTP_OK, "OK");
+		server.route("/api/models/unload/qwen-image-turbo", HTTP_OK, "OK");
 		server.route("/sdapi/v1/txt2img", HTTP_OK, heldAnswer(), LONG_HOLD_MS);
 		// Only the tool-call turn: the abort ends the run, so no answer turn is ever asked for.
 		server.script({ tool: "generate_image", args: { prompt: "a red fox", size: "256x256" } });
@@ -395,7 +395,7 @@ describe("tool, text-only model", () => {
 		await harness.pi.client.abort();
 		await prompt.catch(() => undefined);
 
-		expect(server.log.map((r) => r.path)).toContain("/api/models/unload/qwen-image");
+		expect(server.log.map((r) => r.path)).toContain("/api/models/unload/qwen-image-turbo");
 	});
 });
 
