@@ -1,6 +1,6 @@
 {
   "baseUrl": "https://llm.rezolver-zero.com/v1",
-  "model": "qwen-image",
+  "model": "qwen-image-turbo",
   "size": "1024x1024",
   "format": "png",
   "cfgScale": 6.0,

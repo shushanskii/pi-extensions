@@ -35,3 +35,7 @@ flight answers 502 with an empty body and the retry seconds later answers 503.
 How many references is a separate question and also open. The model is documented for up
 to 10, `sd-server` imposes no limit of its own — it accepts whatever list arrives — and
 nothing past two has been tried on this box, so whether 10 fits in memory here is unknown.
+
+Every row above was measured on `qwen-image`. The default model is now `qwen-image-turbo`,
+whose weights are a larger quantization over the same encoder, so its own budget is
+unmeasured too — the turbo may survive more than the table shows, or less.
