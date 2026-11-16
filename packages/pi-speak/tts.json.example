@@ -2,9 +2,11 @@
   "enabled": true,
   "summarize": true,
   "endpoint": "https://llm.rezolver-zero.com/v1/audio/speech",
-  "model": "piper",
+  "model": "qwen-tts",
   "apiKey": "<llama-swap API key>",
-  "voice": "",
+  "voice": "serena",
+  "instruct": "",
+  "voices": ["serena", "vivian", "uncle_fu", "dylan", "eric", "ryan", "aiden", "ono_anna", "sohee"],
   "speed": 1.05,
   "maxChars": 600,
   "player": null

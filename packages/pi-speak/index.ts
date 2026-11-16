@@ -14,6 +14,17 @@
  * Why piper and not Kokoro: Kokoro's eight languages do not include Russian. This
  * voice reads Russian answers, so the voice has to speak Russian.
  *
+ * Voice and manner: `voice` picks a speaker and `instruct` describes the delivery
+ * ("quietly", "cheerfully"), both as tts.json defaults and as per-call parameters of the
+ * `speak` tool, so the model can change either for one line. They exist for Qwen3-TTS
+ * behind audio.cpp (llm.rezolver-zero.com, model `qwen-tts`), whose CustomVoice model holds
+ * nine speakers in one load — switching costs nothing. Its `/v1/audio/voices` lists only
+ * the reference-clip library, not those nine, so the names cannot be discovered over the
+ * API: `voices` in tts.json is the list, and a tool call naming anything outside it is
+ * refused on the spot instead of failing later in a once-per-session notice. `instruct`
+ * is sent only when set; piper's server reads neither field, so the same config works
+ * against it unchanged.
+ *
  * Why agent_settled and not agent_end: agent_end fires after each low-level run, and
  * Pi may still retry, compact or continue with queued work. Settling is the moment the
  * answer is the answer.
@@ -39,10 +50,18 @@ interface Config {
 	model: string;
 	apiKey: string;
 	voice: string;
+	instruct: string;
+	voices: string[];
 	speed: number;
 	maxChars: number;
 	player: string | null;
 	summaryPrompt: string;
+}
+
+/** A per-call override of the configured voice and manner; empty means "use tts.json". */
+interface Delivery {
+	voice?: string;
+	instruct?: string;
 }
 
 const DEFAULTS: Config = {
@@ -52,6 +71,8 @@ const DEFAULTS: Config = {
 	model: "piper",
 	apiKey: "",
 	voice: "",
+	instruct: "",
+	voices: [],
 	speed: 1.05,
 	maxChars: 600,
 	player: null,
@@ -184,6 +205,16 @@ export default function (pi: ExtensionAPI) {
 
 	const pickPlayer = () => cfg.player ?? defaultPlayer();
 
+	// Read once, when the tool is registered: a `/speak reload` changes which voices are
+	// accepted, but the list the model was shown stays until pi restarts.
+	function voiceDescription(): string {
+		const fallback = cfg.voice || "the server's default";
+		if (cfg.voices.length === 0) {
+			return `Optional speaker for this line. Omit for ${fallback}.`;
+		}
+		return `Optional speaker for this line, one of: ${cfg.voices.join(", ")}. Omit for ${fallback}.`;
+	}
+
 	function notify(ctx: ExtensionContext | undefined, text: string) {
 		// Once per session for the recurring failures: a dead endpoint should not
 		// talk over the terminal on every turn.
@@ -194,14 +225,19 @@ export default function (pi: ExtensionAPI) {
 		ctx.ui.notify(text, "warning");
 	}
 
-	async function synthesize(text: string): Promise<Buffer> {
+	async function synthesize(text: string, delivery: Delivery): Promise<Buffer> {
 		const headers: Record<string, string> = { "Content-Type": "application/json" };
 		if (cfg.apiKey) {
 			headers.Authorization = `Bearer ${cfg.apiKey}`;
 		}
 		const body: Record<string, unknown> = { model: cfg.model, input: text, speed: cfg.speed };
-		if (cfg.voice) {
-			body.voice = cfg.voice;
+		const voice = delivery.voice || cfg.voice;
+		if (voice) {
+			body.voice = voice;
+		}
+		const instruct = delivery.instruct || cfg.instruct;
+		if (instruct) {
+			body.instruct = instruct;
 		}
 
 		const res = await fetch(cfg.endpoint, { method: "POST", headers, body: JSON.stringify(body) });
@@ -286,7 +322,7 @@ export default function (pi: ExtensionAPI) {
 		return summarize(text, ctx).catch(() => text);
 	}
 
-	function say(text: string, ctx: ExtensionContext | undefined, raw = false) {
+	function say(text: string, ctx: ExtensionContext | undefined, raw = false, delivery: Delivery = {}) {
 		let wanted = text;
 		if (!raw) {
 			wanted = speakable(text, cfg.maxChars);
@@ -299,7 +335,7 @@ export default function (pi: ExtensionAPI) {
 		pending = pending
 			.then(async () => {
 				const spoken = await spokenText(wanted, ctx, raw);
-				const wav = await synthesize(speakable(spoken, cfg.maxChars));
+				const wav = await synthesize(speakable(spoken, cfg.maxChars), delivery);
 				await play(wav);
 			})
 			.catch((e: unknown) => notify(ctx, `speak: ${messageOf(e)}`));
@@ -328,13 +364,30 @@ export default function (pi: ExtensionAPI) {
 			"Say one short sentence out loud through the lab voice. Use it when a line is worth hearing; everything else stays on screen.",
 		parameters: Type.Object({
 			text: Type.String({ description: "One or two plain sentences. No markdown, no code, no paths." }),
+			voice: Type.Optional(Type.String({ description: voiceDescription() })),
+			instruct: Type.Optional(
+				Type.String({
+					description:
+						"Optional delivery for this line, one short phrase, e.g. «спокойно и медленно», «радостно», «шёпотом». Omit for the default manner.",
+				}),
+			),
 		}),
 		// pi types execute as Promise-returning; this one answers at once because playback is
 		// chained onto `pending` and outlives the call — waiting for the voice would hold the
 		// tool call open for the length of the sentence.
 		// biome-ignore lint/suspicious/useAwait: the tool type demands a promise, not a wait
 		execute: async (_id, params, _signal, _onUpdate, ctx) => {
-			say(String(params.text ?? ""), ctx as unknown as ExtensionContext, true);
+			const voice = String(params.voice ?? "").trim();
+			// Refused here, where the model sees the answer, rather than by the server, whose
+			// error would only reach a notice shown once per session.
+			if (voice && cfg.voices.length > 0 && !cfg.voices.includes(voice)) {
+				return {
+					content: [{ type: "text", text: `unknown voice "${voice}"; available: ${cfg.voices.join(", ")}` }],
+					details: undefined,
+				};
+			}
+			const instruct = String(params.instruct ?? "").trim();
+			say(String(params.text ?? ""), ctx as unknown as ExtensionContext, true, { voice, instruct });
 			return { content: [{ type: "text", text: "spoken" }], details: undefined };
 		},
 	});
@@ -366,7 +419,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			if (!arg) {
 				ctx.ui.notify(
-					`voice ${onOff(enabled)} · ${cfg.endpoint} · model ${cfg.model} · summarize ${onOff(cfg.summarize)}`,
+					`voice ${onOff(enabled)} · ${cfg.endpoint} · model ${cfg.model} · speaker ${cfg.voice || "default"} · summarize ${onOff(cfg.summarize)}`,
 					"info",
 				);
 				return;
