@@ -14,6 +14,7 @@ pi update  --extensions          # moves every unpinned package to its latest ve
 | [`pi-web`](packages/pi-web)                   | Crawl4AI as `web_peek`, `web_read`, `web_screenshot`, `web_pdf`; `/web` shows what the model is offered | `web.json`         | global                    |
 | [`pi-image`](packages/pi-image)               | qwen-image as `generate_image`; `/image test`                                                           | `image.json`       | global                    |
 | [`pi-speak`](packages/pi-speak)               | one spoken Russian sentence at the end of a turn, through piper; `/speak`                               | `tts.json`         | global                    |
+| [`pi-spotify`](packages/pi-spotify)           | Spotify as `spotify`: play, pause, skip, volume, what is playing; `/spotify login`                      | `spotify.json`     | global                    |
 | [`next-prompt`](packages/next-prompt)         | the next message guessed as grey ghost text; `/suggest`                                                 | `next-prompt.json` | global                    |
 | [`rewrite-compact`](packages/rewrite-compact) | a compaction summary rewritten, not appended to                                                         | —                  | global                    |
 | [`remote-gate`](packages/remote-gate)         | a yes/no before a bash call changes a remote host or the network                                        | —                  | global, **not installed** |
