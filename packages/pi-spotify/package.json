@@ -1,0 +1,31 @@
+{
+	"name": "@shushanskii/pi-spotify",
+	"version": "1.0.0",
+	"description": "Spotify as a tool the model can call: play, pause, skip, volume, what is playing",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/shushanskii/pi-extensions.git"
+	},
+	"keywords": [
+		"pi-package"
+	],
+	"license": "UNLICENSED",
+	"files": [
+		"index.ts",
+		"README.md",
+		"spotify.json.example"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*",
+		"typebox": "*"
+	},
+	"publishConfig": {
+		"registry": "https://npm.pkg.github.com/"
+	}
+}

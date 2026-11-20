@@ -1,0 +1,7 @@
+{
+  "clientId": "<Client ID of your app at developer.spotify.com>",
+  "tokenFile": "~/.pi/agent/spotify.token",
+  "device": "",
+  "redirectPort": 8898,
+  "volumeStep": 15
+}
