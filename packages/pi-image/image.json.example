@@ -4,6 +4,13 @@
   "size": "1024x1024",
   "format": "png",
   "cfgScale": 6.0,
+  "loras": {
+    "f23gg/NSFW-Qwen-Lora.safetensors": {
+      "description": "general NSFW",
+      "trigger": "nsfw_qwen_lora",
+      "weight": 0.8
+    }
+  },
   "dir": "~/Pictures/pi",
   "timeoutMs": 900000,
   "open": false

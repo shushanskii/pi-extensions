@@ -104,6 +104,19 @@
  * server ignored. Measured 2026-11-25: 26 sigmas at 512x672 on the turbo answered in 77s
  * with header `Steps: 25`, against 27s for the entry's own 8 steps.
  *
+ * Why the tool asks the server which LoRAs exist. `lora` is a path, and a wrong one costs a
+ * whole generation before the server answers `400 invalid_model_config`. The catalog is one
+ * GET — `/sdapi/v1/loras?model=<model>` — and the `model` part is not optional: without it
+ * llama-swap answers `404 no model id could be identified` even with the model loaded
+ * (measured 2026-11-25, and `?model=` accepts the name or an alias). The answer carries
+ * `name` and `path` only, so what an adapter is *for* comes from `loras` in the config: a map
+ * keyed by the same path, holding a description, the trigger word and the weight to use when
+ * a call names the file and sets none. `/image loras` prints the two side by side and names
+ * both ways they disagree — a manifest entry the server no longer has, a file nobody
+ * documented. The probe is a courtesy, not a gate: a catalog that answers nothing is swallowed
+ * and the server's own 400 stays the check, because a lookup is not the picture and must not
+ * be the thing that fails it.
+ *
  * Config: ~/.pi/agent/image.json — the same directory and plaintext convention as
  * tts.json. `/image test` proves both routes, one after the other on the one GPU, for
  * the price of two 256² generations — about 40 s of it warm.
@@ -154,6 +167,8 @@ interface Config {
 	format: string;
 	/** Sent on the SDAPI route; the OpenAI route uses the server's --cfg-scale. */
 	cfgScale: number;
+	/** What each LoRA in the server's catalog is for, keyed by the path `lora` takes. */
+	loras: Record<string, LoraInfo>;
 	/** Where the files go when the caller names no path. */
 	dir: string;
 	/**
@@ -175,6 +190,7 @@ const DEFAULTS: Config = {
 	size: "1024x1024",
 	format: "png",
 	cfgScale: 6.0,
+	loras: {},
 	dir: "~/Pictures/pi",
 	timeoutMs: 900_000,
 	open: false,
@@ -420,9 +436,92 @@ function scheduleOf(values: number[]): Schedule {
 	return { block: `<sd_cpp_extra_args>${json}</sd_cpp_extra_args>`, values: values.length, steps: values.length - 1 };
 }
 
-/** `NSFW-Qwen-Lora.safetensors@0.8` — the file the server applies, and how strongly. */
-function loraTag(loras: { path: string; weight?: number }[]): string {
-	return loras.map((l) => `${basename(l.path)}@${l.weight ?? 1}`).join(", ");
+/** One LoRA as the model names it in a call. */
+interface LoraRef {
+	/** A file in the server's catalog, not a local path. */
+	path: string;
+	/** How strongly to apply it; the config's note fills this when the call sets none. */
+	weight?: number;
+}
+
+/** One entry of the config's `loras` map: what the adapter does and how hard to run it. */
+interface LoraInfo {
+	/** What the adapter is for, in the words the model reads. */
+	description?: string;
+	/** The word it was trained with, if it answers to one. */
+	trigger?: string;
+	/** The weight to use when a call names this file and sets none. Default 1. */
+	weight?: number;
+}
+
+/** One entry of the server's LoRA catalog. */
+interface LoraFile {
+	/** The file stem the server shows. */
+	name: string;
+	/** The path `lora` takes: relative to the server's `--lora-model-dir`. */
+	path: string;
+}
+
+/** `NSFW-Qwen-Lora.safetensors@0.8 general NSFW` — what the echo and the call header show. */
+function loraTag(loras: LoraRef[], notes: Record<string, LoraInfo>): string {
+	return loras
+		.map((l) => {
+			const note = notes[l.path];
+			const tag = `${basename(l.path)}@${l.weight ?? note?.weight ?? 1}`;
+			if (note?.description === undefined) {
+				return tag;
+			}
+			return `${tag} ${note.description}`;
+		})
+		.join(", ");
+}
+
+/**
+ * The catalog endpoint. llama-swap needs the model named: a bare `/sdapi/v1/loras` answers
+ * `404 no model id could be identified`, while `?model=` routes to that entry.
+ */
+function lorasUrl(cfg: Config): string {
+	return `${originOf(cfg)}/sdapi/v1/loras?model=${encodeURIComponent(cfg.model)}`;
+}
+
+/** Ask the server which LoRA files the model can be given. */
+async function listLoras(cfg: Config, signal: AbortSignal): Promise<LoraFile[]> {
+	const res = await getJson(lorasUrl(cfg), signal);
+	if (res.status !== HTTP_OK) {
+		throw new Error(`${cfg.model}: HTTP ${res.status} from /sdapi/v1/loras — ${res.text.slice(0, PREVIEW_CHARS)}`);
+	}
+	const parsed: unknown = JSON.parse(res.text);
+	if (!Array.isArray(parsed)) {
+		throw new Error(`${cfg.model}: /sdapi/v1/loras answered something that is not a list`);
+	}
+	const files: LoraFile[] = [];
+	for (const item of parsed) {
+		const path = stringField(item, "path");
+		const name = stringField(item, "name");
+		if (path === undefined || name === undefined) {
+			throw new Error(`${cfg.model}: a lora entry without name or path: ${JSON.stringify(item)}`);
+		}
+		files.push({ name, path });
+	}
+	return files;
+}
+
+// A catalog is cheap to ask and changes only when someone puts a file on the box, so one answer
+// is reused for a minute: a session that draws five pictures asks once. `/image loras` refetches
+// on demand, and a generation gives the probe this short leash because it is not the picture.
+const CATALOG_TTL_MS = 60_000;
+const CATALOG_GIVE_MS = 3000;
+let catalog: { url: string; at: number; files: LoraFile[] } | undefined;
+
+/** The catalog, refetched when it is older than the TTL, the model changed, or `force`. */
+async function catalogFor(cfg: Config, signal: AbortSignal, force = false): Promise<LoraFile[]> {
+	const url = lorasUrl(cfg);
+	if (!force && catalog?.url === url && Date.now() - catalog.at < CATALOG_TTL_MS) {
+		return catalog.files;
+	}
+	const files = await listLoras(cfg, signal);
+	catalog = { url, at: Date.now(), files };
+	return files;
 }
 
 function slug(text: string): string {
@@ -470,7 +569,7 @@ interface Args {
 	sigmas?: number[];
 	seed?: number;
 	negativePrompt?: string;
-	lora?: { path: string; weight?: number }[];
+	lora?: LoraRef[];
 	image?: string[];
 	initImage?: string;
 	mask?: string;
@@ -714,6 +813,22 @@ async function generate(
 		repaint;
 	const api = cfg.baseUrl.replace(TRAILING_SLASH, "");
 	const origin = originOf(cfg);
+	// A path the server does not know costs a whole generation to discover, so it is checked
+	// against the catalog first when one is reachable; a failed lookup is swallowed, because a
+	// lookup is not the picture and must not be the thing that fails it.
+	if (args.lora?.length) {
+		const known = await catalogFor(cfg, AbortSignal.timeout(CATALOG_GIVE_MS)).catch(() => undefined);
+		if (known !== undefined) {
+			for (const l of args.lora) {
+				if (!known.some((f) => f.path === l.path)) {
+					throw new Error(
+						`lora: ${l.path} is not in ${cfg.model}'s catalog (${known.map((f) => f.path).join(", ") || "empty"})`,
+					);
+				}
+			}
+		}
+	}
+
 	// `negative_prompt`, `cfg_scale`, `batch_size` and `output_format` are the server's
 	// vocabulary rather than this file's, so both shapes are built as maps: the keys are wire
 	// data, and the naming rule is about the identifiers this file owns.
@@ -739,7 +854,7 @@ async function generate(
 		body.cfg_scale = cfg.cfgScale;
 		body.batch_size = n;
 		if (args.lora?.length) {
-			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: l.weight ?? 1 }));
+			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: l.weight ?? cfg.loras[l.path]?.weight ?? 1 }));
 		}
 		if (args.initImage !== undefined) {
 			body.init_images = [readImage("initImage", args.initImage)];
@@ -891,7 +1006,7 @@ async function generate(
 		} else {
 			echo = `${stepWord}, cfg ${cfg.cfgScale}, seed ${seed}`;
 			if (args.lora?.length) {
-				echo += `, lora ${loraTag(args.lora)}`;
+				echo += `, lora ${loraTag(args.lora, cfg.loras)}`;
 			}
 			if (route === "sdapi/img2img") {
 				let how = "repainting";
@@ -1128,7 +1243,7 @@ export default function (pi: ExtensionAPI) {
 				bits.push(`seed ${a.seed}`);
 			}
 			if (a.lora?.length) {
-				bits.push(`lora ${loraTag(a.lora)}`);
+				bits.push(`lora ${loraTag(a.lora, cfg.loras)}`);
 			}
 			let line = theme.fg("toolTitle", theme.bold("generate_image")) + theme.fg("muted", ` · ${bits.join(" · ")}`);
 			if (a.prompt) {
@@ -1186,7 +1301,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("image", {
-		description: "qwen-image: test | config | <prompt>",
+		description: "qwen-image: test | config | loras | <prompt>",
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
 			const { ui } = ctx as unknown as ExtensionContext;
@@ -1196,12 +1311,30 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			// The server's list and the config's notes side by side: the list is what can be
+			// drawn, the notes say what each one is for, and the two ways they disagree are the
+			// useful output — a file nobody documented, a note whose file is gone.
+			if (arg === "loras") {
+				const files = await catalogFor(cfg, AbortSignal.timeout(CATALOG_GIVE_MS), true);
+				const shown = [`image: ${files.length} loras on ${cfg.model}`];
+				for (const f of files) {
+					shown.push(`  ${f.path} — ${cfg.loras[f.path]?.description ?? "undocumented"}`);
+				}
+				for (const path of Object.keys(cfg.loras)) {
+					if (!files.some((f) => f.path === path)) {
+						shown.push(`  manifest only: ${path}`);
+					}
+				}
+				ui.notify(shown.join("\n"), "info");
+				return;
+			}
+
 			let prompt = arg;
 			if (arg === "test") {
 				prompt = "a small red fox sitting in snow, watercolor";
 			}
 			if (!prompt) {
-				ui.notify("usage: /image test | config | <prompt>", "info");
+				ui.notify("usage: /image test | config | loras | <prompt>", "info");
 				return;
 			}
 

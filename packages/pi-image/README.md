@@ -3,6 +3,9 @@
 The lab's qwen-image as a tool the model can call: draw from a prompt, edit a picture by
 reference (`image`), or repaint inside a mask (`initImage`, `mask`, `strength`). A call can
 also name the sigma schedule to sample (`sigmas`) when the model's own is not the one wanted.
+LoRAs are named by the path the server lists; the `loras` key says what each file is for and
+what weight to use when a call sets none, and `/image loras` prints that list beside the
+server's own catalog and names the files nobody documented.
 
 ```bash
 pi install npm:@shushanskii/pi-image

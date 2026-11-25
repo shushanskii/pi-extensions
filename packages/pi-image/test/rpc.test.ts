@@ -56,7 +56,17 @@ beforeAll(async () => {
 	server = await startFakeServer();
 	home = makeHome();
 	home.agentFile("models.json", scriptedModels(server.url));
-	home.agentFile("image.json", { baseUrl: `${server.url}/v1`, dir: "~/pictures" });
+	home.agentFile("image.json", {
+		baseUrl: `${server.url}/v1`,
+		dir: "~/pictures",
+		// The notes the tool reads to say what a file is for: one matching a catalog file with a
+		// weight, one matching a catalog file without, one whose file the server no longer has.
+		loras: {
+			"f23gg/NSFW-Qwen-Lora.safetensors": { description: "general NSFW", trigger: "nsfw_qwen_lora", weight: 0.8 },
+			"author/style.safetensors": { description: "paper cut-out" },
+			"gone/Old-Lora.safetensors": { description: "removed upstream" },
+		},
+	});
 });
 
 afterAll(async () => {
@@ -133,6 +143,19 @@ describe("commands, no model", () => {
 		expect(last).toEqual([
 			'image: ✗ 1/2 images/generations — qwen-image-turbo: HTTP 503 from /v1/images/generations — {"error":"model is loading"}',
 		]);
+	});
+
+	test("/image loras shows the server's catalog beside the config's notes", async () => {
+		await harness.pi.client.prompt("/image loras");
+		const notice = await harness.pi.waitForUi((r) => r.method === "notify");
+
+		expect(notice.message).toContain("image: 2 loras on qwen-image-turbo");
+		expect(notice.message).toContain("  f23gg/NSFW-Qwen-Lora.safetensors — general NSFW");
+		expect(notice.message).toContain("  author/style.safetensors — paper cut-out");
+		// A note whose file the server no longer has is the other half of the answer.
+		expect(notice.message).toContain("  manifest only: gone/Old-Lora.safetensors");
+		// The model has to be named: a bare /sdapi/v1/loras answers 404 on llama-swap.
+		expect(server.log.find((r) => r.path === "/sdapi/v1/loras")?.query).toBe("model=qwen-image-turbo");
 	});
 });
 
@@ -261,6 +284,26 @@ describe("tool, text-only model", () => {
 		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject({
 			lora: [{ path: "author/style.safetensors", multiplier: 1 }],
 		});
+	});
+
+	test("a lora the catalog does not have is refused before the picture is asked for", async () => {
+		// The command fills the cache, so the tool's own lookup is answered from it and the request
+		// count is the proof: one catalog call, two model turns, no picture.
+		await harness.pi.client.prompt("/image loras");
+		drawAndStop({ size: "256x256", lora: [{ path: "nowhere/Missing.safetensors" }] });
+		const end = await toolResult(harness.pi, "a fox and a lora that is not there");
+
+		expect(end.isError).toBe(true);
+		expect(end.result?.content?.[0]?.text).toContain("lora: nowhere/Missing.safetensors is not in qwen-image-turbo's");
+		expect(server.log.map((r) => r.path)).toEqual(["/sdapi/v1/loras", "/v1/chat/completions", "/v1/chat/completions"]);
+	});
+
+	test("the echo carries the weight and the words the config keeps for the file", async () => {
+		drawAndStop({ size: "256x256", lora: [{ path: "f23gg/NSFW-Qwen-Lora.safetensors" }] });
+		const end = await toolResult(harness.pi, "a fox with a documented lora");
+
+		// The weight comes from the manifest, so does the description the model gets back.
+		expect(end.result?.content?.[0]?.text).toContain("lora NSFW-Qwen-Lora.safetensors@0.8 general NSFW");
 	});
 
 	test("sigmas ride the prompt as an sd_cpp_extra_args block", async () => {
