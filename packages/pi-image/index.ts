@@ -110,8 +110,11 @@
  * llama-swap answers `404 no model id could be identified` even with the model loaded
  * (measured 2026-11-25, and `?model=` accepts the name or an alias). The answer carries
  * `name` and `path` only, so what an adapter is *for* comes from `loras` in the config: a map
- * keyed by the same path, holding a description, the trigger word and the weight to use when
- * a call names the file and sets none. `/image loras` prints the two side by side and names
+ * keyed by the same path, holding when to use it, when not to, which files it conflicts with,
+ * the weight (or the range the author asks for), the trigger word and the card all of it was
+ * copied from. Those keys are also everything `lora[].path` offers: a file nobody described is
+ * a file the model cannot name, which is what turns the manifest from documentation into a
+ * contract. `/image loras` prints the two side by side and names
  * both ways they disagree — a manifest entry the server no longer has, a file nobody
  * documented. The probe is a courtesy, not a gate: a catalog that answers nothing is swallowed
  * and the server's own 400 stays the check, because a lookup is not the picture and must not
@@ -438,20 +441,35 @@ function scheduleOf(values: number[]): Schedule {
 
 /** One LoRA as the model names it in a call. */
 interface LoraRef {
-	/** A file in the server's catalog, not a local path. */
+	/** A file the config describes; the schema narrows the field to exactly those paths. */
 	path: string;
-	/** How strongly to apply it; the config's note fills this when the call sets none. */
+	/** How strongly to apply it; the manifest's weight fills this when the call sets none. */
 	weight?: number;
 }
 
-/** One entry of the config's `loras` map: what the adapter does and how hard to run it. */
+/**
+ * One entry of the config's `loras` map: the rule for when to reach for the file, not a
+ * caption. `lora[].path` is built into an enum out of these keys, so a file nobody described
+ * is a file the model is not offered — describing it is what makes it usable, and a wrong
+ * field is a choice the model makes wrong too. Hence `source`: every entry traces to a card.
+ */
 interface LoraInfo {
-	/** What the adapter is for, in the words the model reads. */
-	description?: string;
-	/** The word it was trained with, if it answers to one. */
+	/** The kind of prompt this file fixes, in the words the model reads. */
+	useWhen?: string;
+	/** Where it adds nothing, or actively hurts. */
+	notFor?: string;
+	/** Files whose concepts overlap: naming both is a fight, not a stronger picture. */
+	conflictsWith?: string[];
+	/**
+	 * The weight to send when a call names this file and sets none. Either one number, or the
+	 * range the author asks for — of a range, the middle is what gets sent, because the tool
+	 * has to send one number and the middle is the only one the range endorses entirely.
+	 */
+	weight?: number | [number, number];
+	/** The word it answers to, if it answers to one. Authors lie about this; `source` says who. */
 	trigger?: string;
-	/** The weight to use when a call names this file and sets none. Default 1. */
-	weight?: number;
+	/** The card the fields above were copied from. */
+	source?: string;
 }
 
 /** One entry of the server's LoRA catalog. */
@@ -462,16 +480,40 @@ interface LoraFile {
 	path: string;
 }
 
-/** `NSFW-Qwen-Lora.safetensors@0.8 general NSFW` — what the echo and the call header show. */
+// Two decimals are enough to distinguish the weights anyone actually types, and rounding
+// keeps a range's middle from arriving as 0.7000000000000001.
+const WEIGHT_PRECISION = 100;
+
+/** The number a call gets when it names a file and sets no weight: a range's middle, or 1. */
+function weightOf(ref: LoraRef, note?: LoraInfo): number {
+	if (ref.weight !== undefined) {
+		return ref.weight;
+	}
+	const configured = note?.weight;
+	if (configured === undefined) {
+		return 1;
+	}
+	if (Array.isArray(configured)) {
+		return Math.round(((configured[0] + configured[1]) / 2) * WEIGHT_PRECISION) / WEIGHT_PRECISION;
+	}
+	return configured;
+}
+
+/** Whether the manifest says two files fight — a pair may be named from either side. */
+function conflictsBetween(notes: Record<string, LoraInfo>, a: string, b: string): boolean {
+	return notes[a]?.conflictsWith?.includes(b) === true || notes[b]?.conflictsWith?.includes(a) === true;
+}
+
+/** `NSFW-Qwen-Lora.safetensors@0.9 general NSFW …` — what the echo and the call header show. */
 function loraTag(loras: LoraRef[], notes: Record<string, LoraInfo>): string {
 	return loras
 		.map((l) => {
 			const note = notes[l.path];
-			const tag = `${basename(l.path)}@${l.weight ?? note?.weight ?? 1}`;
-			if (note?.description === undefined) {
+			const tag = `${basename(l.path)}@${weightOf(l, note)}`;
+			if (note?.useWhen === undefined) {
 				return tag;
 			}
-			return `${tag} ${note.description}`;
+			return `${tag} ${note.useWhen}`;
 		})
 		.join(", ");
 }
@@ -813,10 +855,21 @@ async function generate(
 		repaint;
 	const api = cfg.baseUrl.replace(TRAILING_SLASH, "");
 	const origin = originOf(cfg);
-	// A path the server does not know costs a whole generation to discover, so it is checked
-	// against the catalog first when one is reachable; a failed lookup is swallowed, because a
-	// lookup is not the picture and must not be the thing that fails it.
+	// A path the server does not know costs a whole generation to discover, so the call is
+	// checked before the box wakes: first the pairs the manifest calls conflicting (no network
+	// needed), then the catalog itself. A failed lookup is swallowed, because a lookup is not
+	// the picture and must not be the thing that fails it.
 	if (args.lora?.length) {
+		// Two files trained on the same concept do not add up, they argue — and the model cannot
+		// see that from two paths, so the manifest says it and the call is refused here. A refused
+		// call costs nothing; a sampled one costs a generation and a picture nobody asked for.
+		for (const [index, l] of args.lora.entries()) {
+			for (const other of args.lora.slice(index + 1)) {
+				if (conflictsBetween(cfg.loras, l.path, other.path)) {
+					throw new Error(`lora: ${l.path} and ${other.path} conflict — apply one of them`);
+				}
+			}
+		}
 		const known = await catalogFor(cfg, AbortSignal.timeout(CATALOG_GIVE_MS)).catch(() => undefined);
 		if (known !== undefined) {
 			for (const l of args.lora) {
@@ -854,7 +907,7 @@ async function generate(
 		body.cfg_scale = cfg.cfgScale;
 		body.batch_size = n;
 		if (args.lora?.length) {
-			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: l.weight ?? cfg.loras[l.path]?.weight ?? 1 }));
+			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: weightOf(l, cfg.loras[l.path]) }));
 		}
 		if (args.initImage !== undefined) {
 			body.init_images = [readImage("initImage", args.initImage)];
@@ -1064,8 +1117,23 @@ function openIn(path: string): void {
 	spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
 }
 
+/** What the schema says on `lora[].path`; one string for both shapes of the field below. */
+const LORA_PATH_DOC =
+	'The LoRA file inside the server\'s loras directory, subfolders included — "author/style.safetensors". Not a local path.';
+
 export default function (pi: ExtensionAPI) {
 	const cfg = loadConfig();
+
+	// The manifest is what the model can choose from. With entries, `path` becomes an enum of the
+	// described files, so the list and its one-line rules sit in front of the model before it
+	// picks — that is the whole reason the manifest exists. Without entries the field stays a
+	// plain string and the catalog check is the only guard, so a config with no manifest keeps
+	// working the way the published version did.
+	const loraPaths = Object.keys(cfg.loras);
+	let loraPathSchema = Type.String({ description: LORA_PATH_DOC });
+	if (loraPaths.length > 0) {
+		loraPathSchema = Type.String({ description: LORA_PATH_DOC, enum: loraPaths });
+	}
 
 	const tool = defineTool({
 		name: "generate_image",
@@ -1130,12 +1198,12 @@ export default function (pi: ExtensionAPI) {
 			lora: Type.Optional(
 				Type.Array(
 					Type.Object({
-						path: Type.String({
-							description:
-								'The LoRA file inside the server\'s loras directory, subfolders included — "author/style.safetensors". Not a local path.',
-						}),
+						path: loraPathSchema,
 						weight: Type.Optional(
-							Type.Number({ description: "How strongly to apply it; 0.6..1.0 is the usual range. Default 1." }),
+							Type.Number({
+								description:
+									"How strongly to apply it; 0.6..1.0 is the usual range. Default: the manifest's weight for that file, or 1.",
+							}),
 						),
 					}),
 					{ description: "LoRA files from the server's catalog to apply to this generation." },
@@ -1318,7 +1386,8 @@ export default function (pi: ExtensionAPI) {
 				const files = await catalogFor(cfg, AbortSignal.timeout(CATALOG_GIVE_MS), true);
 				const shown = [`image: ${files.length} loras on ${cfg.model}`];
 				for (const f of files) {
-					shown.push(`  ${f.path} — ${cfg.loras[f.path]?.description ?? "undocumented"}`);
+					const note = cfg.loras[f.path];
+					shown.push(`  ${f.path} — ${note?.useWhen ?? "undocumented"}`);
 				}
 				for (const path of Object.keys(cfg.loras)) {
 					if (!files.some((f) => f.path === path)) {

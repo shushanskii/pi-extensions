@@ -116,7 +116,7 @@ function openAiImageAnswer(): Record<string, unknown> {
 /**
  * The LoRA catalog as sd-server answers it. `display_path` is the server's vocabulary rather
  * than this file's, so the entry is built as a map — the same way pi-image builds its bodies.
- * The two paths the pi-image tests name, so a request naming either one is known to the catalog.
+ * The paths the pi-image tests name, so a request naming either one is known to the catalog.
  */
 function loraCatalog(): Record<string, unknown>[] {
 	const entry = (name: string, path: string): Record<string, unknown> => {
@@ -124,7 +124,11 @@ function loraCatalog(): Record<string, unknown>[] {
 		file.display_path = path;
 		return file;
 	};
-	return [entry("NSFW-Qwen-Lora", "f23gg/NSFW-Qwen-Lora.safetensors"), entry("style", "author/style.safetensors")];
+	return [
+		entry("NSFW-Qwen-Lora", "f23gg/NSFW-Qwen-Lora.safetensors"),
+		entry("NSFW-Qwen-by-TheseAlpacas-V2", "Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors"),
+		entry("style", "author/style.safetensors"),
+	];
 }
 
 /** One scripted model answer: text, a tool call pi will then execute, or several calls at once. */

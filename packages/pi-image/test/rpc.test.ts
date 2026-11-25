@@ -25,6 +25,9 @@ const FAILED_NOTICE = /^image: failed after/u;
 const GENERATIONS_LINE = /^image: ✓ 1\/2 images\/generations \d+s — .*pi-image-test-.*\.jpg \(size 256x256, jpeg\)$/u;
 const SDAPI_LINE = /^image: ✓ 2\/2 sdapi\/txt2img \d+s — .*-sdapi\.png \(steps 12, cfg 6, seed -1\)$/u;
 const FOX_FILE = /-a-red-fox\.png$/u;
+/** The weight range the manifest gives `f23gg`; a call that names the file gets its middle. */
+// biome-ignore lint/style/noMagicNumbers: the two ends of a range are the value, not a threshold worth naming
+const F23GG_WEIGHT: [number, number] = [0.8, 1];
 
 /** What pi-image puts into `details`; the package owns the shape, and this file is what pins it. */
 interface ImageDetails {
@@ -59,12 +62,18 @@ beforeAll(async () => {
 	home.agentFile("image.json", {
 		baseUrl: `${server.url}/v1`,
 		dir: "~/pictures",
-		// The notes the tool reads to say what a file is for: one matching a catalog file with a
-		// weight, one matching a catalog file without, one whose file the server no longer has.
+		// The notes the tool reads to say when each file is right: two catalog files the manifest
+		// calls one training in two checkpoints, one catalog file with no weight at all, and one
+		// entry whose file the server no longer has.
 		loras: {
-			"f23gg/NSFW-Qwen-Lora.safetensors": { description: "general NSFW", trigger: "nsfw_qwen_lora", weight: 0.8 },
-			"author/style.safetensors": { description: "paper cut-out" },
-			"gone/Old-Lora.safetensors": { description: "removed upstream" },
+			"f23gg/NSFW-Qwen-Lora.safetensors": {
+				useWhen: "general NSFW",
+				conflictsWith: ["Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors"],
+				weight: F23GG_WEIGHT,
+			},
+			"Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors": { useWhen: "the same training, V2", weight: 0.8 },
+			"author/style.safetensors": { useWhen: "paper cut-out" },
+			"gone/Old-Lora.safetensors": { useWhen: "a file removed upstream" },
 		},
 	});
 });
@@ -149,8 +158,9 @@ describe("commands, no model", () => {
 		await harness.pi.client.prompt("/image loras");
 		const notice = await harness.pi.waitForUi((r) => r.method === "notify");
 
-		expect(notice.message).toContain("image: 2 loras on qwen-image-turbo");
+		expect(notice.message).toContain("image: 3 loras on qwen-image-turbo");
 		expect(notice.message).toContain("  f23gg/NSFW-Qwen-Lora.safetensors — general NSFW");
+		expect(notice.message).toContain("  Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors — the same training, V2");
 		expect(notice.message).toContain("  author/style.safetensors — paper cut-out");
 		// A note whose file the server no longer has is the other half of the answer.
 		expect(notice.message).toContain("  manifest only: gone/Old-Lora.safetensors");
@@ -290,20 +300,37 @@ describe("tool, text-only model", () => {
 		// The command fills the cache, so the tool's own lookup is answered from it and the request
 		// count is the proof: one catalog call, two model turns, no picture.
 		await harness.pi.client.prompt("/image loras");
-		drawAndStop({ size: "256x256", lora: [{ path: "nowhere/Missing.safetensors" }] });
+		drawAndStop({ size: "256x256", lora: [{ path: "gone/Old-Lora.safetensors" }] });
 		const end = await toolResult(harness.pi, "a fox and a lora that is not there");
 
 		expect(end.isError).toBe(true);
-		expect(end.result?.content?.[0]?.text).toContain("lora: nowhere/Missing.safetensors is not in qwen-image-turbo's");
+		expect(end.result?.content?.[0]?.text).toContain("lora: gone/Old-Lora.safetensors is not in qwen-image-turbo's");
 		expect(server.log.map((r) => r.path)).toEqual(["/sdapi/v1/loras", "/v1/chat/completions", "/v1/chat/completions"]);
+	});
+
+	test("two files the manifest calls one training are refused together, without waking the box", async () => {
+		drawAndStop({
+			size: "256x256",
+			lora: [
+				{ path: "f23gg/NSFW-Qwen-Lora.safetensors" },
+				{ path: "Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors" },
+			],
+		});
+		const end = await toolResult(harness.pi, "a fox wearing both checkpoints");
+
+		expect(end.isError).toBe(true);
+		expect(end.result?.content?.[0]?.text).toContain("conflict — apply one of them");
+		// The conflict is answered from the config, so the box was asked nothing but the two turns.
+		expect(server.log.map((r) => r.path)).toEqual(["/v1/chat/completions", "/v1/chat/completions"]);
 	});
 
 	test("the echo carries the weight and the words the config keeps for the file", async () => {
 		drawAndStop({ size: "256x256", lora: [{ path: "f23gg/NSFW-Qwen-Lora.safetensors" }] });
 		const end = await toolResult(harness.pi, "a fox with a documented lora");
 
-		// The weight comes from the manifest, so does the description the model gets back.
-		expect(end.result?.content?.[0]?.text).toContain("lora NSFW-Qwen-Lora.safetensors@0.8 general NSFW");
+		// The weight comes from the manifest — the middle of the range it names — and so does the
+		// line the model gets back.
+		expect(end.result?.content?.[0]?.text).toContain("lora NSFW-Qwen-Lora.safetensors@0.9 general NSFW");
 	});
 
 	test("sigmas ride the prompt as an sd_cpp_extra_args block", async () => {

@@ -6,26 +6,38 @@
   "cfgScale": 6.0,
   "loras": {
     "f23gg/NSFW-Qwen-Lora.safetensors": {
-      "description": "general NSFW",
-      "trigger": "nsfw_qwen_lora",
-      "weight": 0.8
+      "useWhen": "the prompt is NSFW and needs a pose or anatomy the base model fumbles — positions, cum, anatomy",
+      "notFor": "sfw scenes and plain portraits, where it changes nothing",
+      "conflictsWith": ["Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors"],
+      "weight": [0.8, 1],
+      "source": "https://civitai.com/api/v1/models/2958918"
     },
     "Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors": {
-      "description": "general NSFW — blowjobs, cowgirl, doggy, cum, anal; the card asks for 25+ steps, cfg 3-5, er_sde and the beta scheduler",
+      "useWhen": "the same TheseAlpacas training as f23gg/NSFW-Qwen-Lora, re-released as V2 — blowjobs, cowgirl, doggy, anal, cum",
+      "notFor": "sfw scenes; and not beside the f23gg file, which is one epoch of the same run",
+      "conflictsWith": ["f23gg/NSFW-Qwen-Lora.safetensors"],
+      "weight": 0.8,
       "trigger": "nsfw",
-      "weight": 0.8
+      "source": "https://huggingface.co/Oliver577/NSFW-Qwen-by-TheseAlpacas-V2"
     },
     "perpetual3x/Genitalia-Anatomy-2.1-v1.safetensors": {
-      "description": "genital anatomy for adult female and male subjects, text-to-image and image editing; five anatomy groups trained as one adapter",
-      "trigger": "zl_private_v1"
+      "useWhen": "genital anatomy for adult female or male subjects, in generation and in image editing",
+      "notFor": "clothed or sfw frames — it adds anatomy the prompt did not ask for",
+      "weight": 1,
+      "trigger": "zl_private_v1",
+      "source": "https://huggingface.co/perpetual3x/Qwen-Image-Genitalia-Anatomy-Fix-NSFW-LoRA-v1"
     },
     "tawsLoRa/qwen2_1-femaledVaginus-nsfw-v1_3-fine_L22-31.safetensors": {
-      "description": "female genitalia, breasts and male anatomy in any skin colour; v1.3b is the sharper build, layers 22-31 muted",
-      "weight": 0.8
+      "useWhen": "female genitalia, breasts and male anatomy in any skin colour; v1.3b is the sharper build, layers 22-31 muted",
+      "notFor": "sfw frames; and not stacked with another anatomy LoRA without comparing seeds first",
+      "weight": [0.7, 1],
+      "source": "https://civitai.com/api/v1/models/2986844"
     },
     "PromptPotamus/qwen21_fullbody_pass2_fp16.safetensors": {
-      "description": "full-body framing whose pelvis reads as anatomy instead of being cropped away or smeared; the card says it has no trigger word",
-      "weight": 0.8
+      "useWhen": "the frame is full body and the pelvis gets cropped away or smeared; the card says the LoRA has no trigger word",
+      "notFor": "portraits and half-frames, where there is no pelvis to fix",
+      "weight": 0.8,
+      "source": "https://civitai.com/api/v1/models/2983070"
     }
   },
   "dir": "~/Pictures/pi",
