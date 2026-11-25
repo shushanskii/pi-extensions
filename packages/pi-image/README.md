@@ -1,7 +1,8 @@
 # pi-image
 
 The lab's qwen-image as a tool the model can call: draw from a prompt, edit a picture by
-reference (`image`), or repaint inside a mask (`initImage`, `mask`, `strength`).
+reference (`image`), or repaint inside a mask (`initImage`, `mask`, `strength`). A call can
+also name the sigma schedule to sample (`sigmas`) when the model's own is not the one wanted.
 
 ```bash
 pi install npm:@shushanskii/pi-image

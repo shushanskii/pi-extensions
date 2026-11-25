@@ -189,6 +189,12 @@ const LONG_HOLD_MS = 3000;
 const ABORT_AFTER_MS = 1500;
 /** A repaint strength in the middle of the useful range: asked for, and expected back. */
 const STRENGTH = 0.8;
+/** The sigma between the two ends of the test schedule. */
+const SIGMA_MID = 0.5;
+/** A sigma schedule: two steps and the trailing zero the server requires. */
+const SIGMAS = [1, SIGMA_MID, 0];
+/** The same schedule with its required final zero missing. */
+const SIGMAS_WITHOUT_ZERO = [1, SIGMA_MID];
 /** The SDAPI answer for a route the test holds open: the server's key goes in by field. */
 function heldAnswer(): Record<string, unknown> {
 	const held: Record<string, unknown> = {};
@@ -255,6 +261,27 @@ describe("tool, text-only model", () => {
 		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject({
 			lora: [{ path: "author/style.safetensors", multiplier: 1 }],
 		});
+	});
+
+	test("sigmas ride the prompt as an sd_cpp_extra_args block", async () => {
+		drawAndStop({ size: "256x256", sigmas: SIGMAS });
+		const end = await toolResult(harness.pi, "a fox on a schedule");
+
+		// sample_params reaches the compatibility APIs only through the block embedded in prompt.
+		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject({
+			prompt: 'a red fox <sd_cpp_extra_args>{"sample_params":{"custom_sigmas":[1,0.5,0]}}</sd_cpp_extra_args>',
+		});
+		// The schedule is what the server samples, so the echo states its count and not `steps`.
+		expect(end.result?.content?.[0]?.text).toContain("steps 2 from 3 sigmas");
+	});
+
+	test("sigmas without the final zero are refused before the box is woken", async () => {
+		drawAndStop({ size: "256x256", sigmas: SIGMAS_WITHOUT_ZERO });
+		const end = await toolResult(harness.pi, "a fox on a broken schedule");
+
+		expect(end.isError).toBe(true);
+		expect(end.result?.content?.[0]?.text).toBe("sigmas must end in 0, got 0.5");
+		expect(server.log.filter((r) => r.path !== "/v1/chat/completions")).toEqual([]);
 	});
 
 	test("a reference image rides the SDAPI body as extra_images", async () => {

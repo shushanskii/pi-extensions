@@ -84,10 +84,25 @@
  * sigma schedule passed as --sigmas). Measured 2026-11-12 on the SDAPI route at 512x672/20
  * CFG 6: 25.6s on the turbo against the 57s the plain model takes, and 1024²/20 in 101.4s
  * against 337s — a third of the wait for a picture that reads the same, so the fast one is
- * the default. The tool always sends `steps` and `cfg_scale`, so the entry's own 8 steps
- * and CFG 1 reach only callers that omit them; at CFG 6 the turbo came out slightly crisper
- * in texture and at CFG 1 slightly softer, neither broken, so this file does not second-
- * guess the CFG of a model it did not configure.
+ * the default. At CFG 6 the turbo came out slightly crisper in texture and at CFG 1 slightly
+ * softer, neither broken, so this file does not second-guess the CFG of a model it did not
+ * configure.
+ *
+ * Why `steps` alone does nothing on that entry, and `sigmas` exists. The entry's fixed
+ * `--sigmas` override the request's `steps`: measured 2026-11-25, a call for 25 steps came
+ * back with the entry's own 9-value schedule and a picture byte-identical to the 8-step one
+ * (IDAT md5 equal, header still `Steps: 8`), while `cfg_scale` does pass through as `txt_cfg`.
+ * `sigmas` sends the schedule itself, so a caller can ask for steps the entry does not carry.
+ *
+ * Why `sigmas` is a list and not a number. sd-server takes the schedule as
+ * `sample_params.custom_sigmas`, and the compatibility APIs reach it only through a
+ * `<sd_cpp_extra_args>{…}</sd_cpp_extra_args>` block embedded in `prompt`: the server parses
+ * the block, applies it, and strips it from the prompt before generating
+ * (`examples/server/api.md`). A nonempty list replaces the loaded schedule, its length minus
+ * one is the step count, and the final `0` is required — so the shape is checked here before
+ * the box is woken, and the echo states the schedule's count rather than the `steps` the
+ * server ignored. Measured 2026-11-25: 26 sigmas at 512x672 on the turbo answered in 77s
+ * with header `Steps: 25`, against 27s for the entry's own 8 steps.
  *
  * Config: ~/.pi/agent/image.json — the same directory and plaintext convention as
  * tts.json. `/image test` proves both routes, one after the other on the one GPU, for
@@ -194,6 +209,10 @@ const TICK_MS = 1000;
 const DEFAULT_STEPS = 20;
 // -1 is SDAPI's "pick one", so the default seed is a value rather than an absence.
 const SEED_SERVER_PICKS = -1;
+// The server's own bounds for a sigma list. A schedule outside them is refused here rather
+// than at the gateway: a refused request costs nothing, a woken box costs a model load.
+const MIN_SIGMAS = 2;
+const MAX_SIGMAS = 1001;
 // The 2xx band. fetch answered `res.ok` for free; the raw transport compares the number,
 // so both edges get a name — 300 (Multiple Choices) is the first status that is not a
 // success and the last one a generation must not be.
@@ -367,6 +386,45 @@ function parseSize(size: string): { width: number; height: number } | { error: s
 	return { width, height };
 }
 
+interface Schedule {
+	/** The `<sd_cpp_extra_args>` block to append to `prompt`. */
+	block: string;
+	/** How many sigmas were given. */
+	values: number;
+	/** What the server samples: the schedule's length minus one. */
+	steps: number;
+}
+
+/**
+ * A sigma schedule, shaped the way the server reads it. The bounds and the trailing zero are
+ * the server's rules (`examples/server/api.md`), checked here so a schedule it would refuse
+ * costs no GPU time.
+ */
+function scheduleOf(values: number[]): Schedule {
+	if (values.length < MIN_SIGMAS || values.length > MAX_SIGMAS) {
+		throw new Error(`sigmas needs ${MIN_SIGMAS}..${MAX_SIGMAS} values, got ${values.length}`);
+	}
+	if (values.some((v) => !Number.isFinite(v) || v < 0)) {
+		throw new Error(`sigmas must be finite and non-negative, got ${values.join(", ")}`);
+	}
+	if (values.at(-1) !== 0) {
+		throw new Error(`sigmas must end in 0, got ${String(values.at(-1))}`);
+	}
+	// The keys are the server's vocabulary, so they are assigned to maps rather than written
+	// inline, the way the request body builds its own wire names.
+	const params: Record<string, unknown> = {};
+	params.custom_sigmas = values;
+	const extra: Record<string, unknown> = {};
+	extra.sample_params = params;
+	const json = JSON.stringify(extra);
+	return { block: `<sd_cpp_extra_args>${json}</sd_cpp_extra_args>`, values: values.length, steps: values.length - 1 };
+}
+
+/** `NSFW-Qwen-Lora.safetensors@0.8` — the file the server applies, and how strongly. */
+function loraTag(loras: { path: string; weight?: number }[]): string {
+	return loras.map((l) => `${basename(l.path)}@${l.weight ?? 1}`).join(", ");
+}
+
 function slug(text: string): string {
 	return (
 		text.toLowerCase().replace(NOT_SLUG, "-").replace(EDGE_DASHES, "").slice(0, SLUG_MAX).replace(TRAILING_DASH, "") ||
@@ -409,6 +467,7 @@ interface Args {
 	format?: string;
 	path?: string;
 	steps?: number;
+	sigmas?: number[];
 	seed?: number;
 	negativePrompt?: string;
 	lora?: { path: string; weight?: number }[];
@@ -618,6 +677,12 @@ async function generate(
 	const n = Math.max(MIN_IMAGES, Math.min(MAX_IMAGES, Math.floor(args.n ?? 1)));
 	const steps = args.steps ?? DEFAULT_STEPS;
 	const seed = args.seed ?? SEED_SERVER_PICKS;
+	// An entry started with --sigmas samples its own schedule whatever `steps` says, so a
+	// caller that means a different number of steps has to send the schedule itself.
+	let schedule: Schedule | undefined;
+	if (args.sigmas !== undefined) {
+		schedule = scheduleOf(args.sigmas);
+	}
 
 	// The OpenAI body has no field for steps, seed or a negative prompt — and sd-server
 	// leaves its progress status empty while a generation arrives on that route (measured
@@ -641,6 +706,7 @@ async function generate(
 	const format = args.format ?? cfg.format;
 	const knobs =
 		args.steps !== undefined ||
+		args.sigmas !== undefined ||
 		args.seed !== undefined ||
 		Boolean(args.negativePrompt) ||
 		Boolean(args.lora?.length) ||
@@ -651,7 +717,12 @@ async function generate(
 	// `negative_prompt`, `cfg_scale`, `batch_size` and `output_format` are the server's
 	// vocabulary rather than this file's, so both shapes are built as maps: the keys are wire
 	// data, and the naming rule is about the identifiers this file owns.
-	const body: Record<string, unknown> = { model: cfg.model, prompt: args.prompt };
+	const body: Record<string, unknown> = { model: cfg.model };
+	if (schedule === undefined) {
+		body.prompt = args.prompt;
+	} else {
+		body.prompt = `${args.prompt} ${schedule.block}`;
+	}
 	let url: string;
 	let route: string;
 	if (format === "png" || knobs) {
@@ -808,14 +879,19 @@ async function generate(
 		const mime = mimeOf(produced);
 		const ext = extensionOf(mime);
 		// The echo follows the route that answered, not the knobs: a plain call rides SDAPI
-		// too now, and its line has to say what SDAPI was told.
+		// too now, and its line has to say what SDAPI was told. With a schedule in the request,
+		// the schedule is the count the server samples and `steps` is the number it ignored.
+		let stepWord = `steps ${steps}`;
+		if (schedule !== undefined) {
+			stepWord = `steps ${schedule.steps} from ${schedule.values} sigmas`;
+		}
 		let echo: string;
 		if (route === "images/generations") {
 			echo = `size ${size.width}x${size.height}, ${produced}`;
 		} else {
-			echo = `steps ${steps}, cfg ${cfg.cfgScale}, seed ${seed}`;
+			echo = `${stepWord}, cfg ${cfg.cfgScale}, seed ${seed}`;
 			if (args.lora?.length) {
-				echo += `, lora ${args.lora.map((l) => `${basename(l.path)}@${l.weight ?? 1}`).join(", ")}`;
+				echo += `, lora ${loraTag(args.lora)}`;
 			}
 			if (route === "sdapi/img2img") {
 				let how = "repainting";
@@ -925,7 +1001,13 @@ export default function (pi: ExtensionAPI) {
 			steps: Type.Optional(
 				Type.Number({
 					description:
-						"Sampling steps. The tool sends 20; the turbo entry is built for 8, and 4 steps came back as noise on qwen-image.",
+						"Sampling steps. The tool sends 20, and 4 steps came back as noise on qwen-image. An entry started with a fixed --sigmas schedule samples that schedule instead of this number — use `sigmas` there.",
+				}),
+			),
+			sigmas: Type.Optional(
+				Type.Array(Type.Number(), {
+					description:
+						"The sigma schedule to sample, in place of the model's own — 2..1001 values ending in 0, and their count minus one is what gets sampled. This is how to sample more steps than an entry carries: 25 steps at flow_shift 3 is 3t/(1+2t) for t = 1, 24/25 … 0.",
 				}),
 			),
 			seed: Type.Optional(Type.Number({ description: "Fix the seed to repeat or vary one composition." })),
@@ -1034,11 +1116,19 @@ export default function (pi: ExtensionAPI) {
 			if (a.steps !== undefined) {
 				bits.push(`${a.steps} steps`);
 			}
+			// The schedule belongs next to the number it replaces: `steps` is what the server
+			// ignores when sigmas are there, and the header has to show what was sent.
+			if (a.sigmas?.length) {
+				bits.push(`${a.sigmas.length} sigmas`);
+			}
 			if (a.n !== undefined && a.n > 1) {
 				bits.push(`n ${a.n}`);
 			}
 			if (a.seed !== undefined) {
 				bits.push(`seed ${a.seed}`);
+			}
+			if (a.lora?.length) {
+				bits.push(`lora ${loraTag(a.lora)}`);
 			}
 			let line = theme.fg("toolTitle", theme.bold("generate_image")) + theme.fg("muted", ` · ${bits.join(" · ")}`);
 			if (a.prompt) {
