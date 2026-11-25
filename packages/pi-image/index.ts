@@ -85,8 +85,11 @@
  * CFG 6: 25.6s on the turbo against the 57s the plain model takes, and 1024²/20 in 101.4s
  * against 337s — a third of the wait for a picture that reads the same, so the fast one is
  * the default. At CFG 6 the turbo came out slightly crisper in texture and at CFG 1 slightly
- * softer, neither broken, so this file does not second-guess the CFG of a model it did not
- * configure.
+ * softer, neither broken. Measured again on 2026-11-25 with the seed fixed: CFG 1 skips the
+ * unconditional pass, so it runs in half the time at a flatter picture; CFG 6 oversaturates and
+ * on some LoRA pairs breaks anatomy outright; CFG 4 is the working point. That is why `cfgScale`
+ * is a parameter now — the config value is the default, a named LoRA's recipe can ask for its
+ * own, and the call can override both.
  *
  * Why `steps` alone does nothing on that entry, and `sigmas` exists. The entry's fixed
  * `--sigmas` override the request's `steps`: measured 2026-11-25, a call for 25 steps came
@@ -466,6 +469,18 @@ interface LoraInfo {
 	 * has to send one number and the middle is the only one the range endorses entirely.
 	 */
 	weight?: number | [number, number];
+	/**
+	 * The sampling steps this file was measured at. A call that names it and sets none takes the
+	 * highest such number among the named files.
+	 */
+	steps?: number;
+	/**
+	 * The true CFG this file was measured at. A call that names it and sets none takes the lowest
+	 * such number among the named files, because over-driving is the failure that was measured.
+	 */
+	cfgScale?: number;
+	/** The wording the recipe was shot with, so `/image loras` can hand it back verbatim. */
+	promptHint?: string;
 	/** The word it answers to, if it answers to one. Authors lie about this; `source` says who. */
 	trigger?: string;
 	/** The card the fields above were copied from. */
@@ -497,6 +512,39 @@ function weightOf(ref: LoraRef, note?: LoraInfo): number {
 		return Math.round(((configured[0] + configured[1]) / 2) * WEIGHT_PRECISION) / WEIGHT_PRECISION;
 	}
 	return configured;
+}
+
+/**
+ * The steps a call gets when it names files and sets none: the highest the named recipes ask
+ * for. A file that only resolves at 35 steps does not become an 8-step file by sharing a call
+ * with one; a file that declares nothing simply does not take part in the argument.
+ */
+function stepsOf(loras: LoraRef[], notes: Record<string, LoraInfo>): number | undefined {
+	let best: number | undefined;
+	for (const ref of loras) {
+		const asked = notes[ref.path]?.steps;
+		if (asked !== undefined && (best === undefined || asked > best)) {
+			best = asked;
+		}
+	}
+	return best;
+}
+
+/**
+ * The CFG a call gets when it names files and sets none: the lowest the named recipes ask for.
+ * Measured on 2026-11-25: the same pair that reads well at CFG 4 came out with broken anatomy at
+ * 6, so over-driving is the failure worth protecting against, while a CFG under what a file
+ * wants only softens the picture. One number per call, so a stack takes the most cautious ask.
+ */
+function cfgOf(loras: LoraRef[], notes: Record<string, LoraInfo>): number | undefined {
+	let best: number | undefined;
+	for (const ref of loras) {
+		const asked = notes[ref.path]?.cfgScale;
+		if (asked !== undefined && (best === undefined || asked < best)) {
+			best = asked;
+		}
+	}
+	return best;
 }
 
 /** Whether the manifest says two files fight — a pair may be named from either side. */
@@ -608,6 +656,7 @@ interface Args {
 	format?: string;
 	path?: string;
 	steps?: number;
+	cfgScale?: number;
 	sigmas?: number[];
 	seed?: number;
 	negativePrompt?: string;
@@ -816,14 +865,18 @@ async function generate(
 		throw new Error(size.error);
 	}
 	const n = Math.max(MIN_IMAGES, Math.min(MAX_IMAGES, Math.floor(args.n ?? 1)));
-	const steps = args.steps ?? DEFAULT_STEPS;
-	const seed = args.seed ?? SEED_SERVER_PICKS;
 	// An entry started with --sigmas samples its own schedule whatever `steps` says, so a
 	// caller that means a different number of steps has to send the schedule itself.
 	let schedule: Schedule | undefined;
 	if (args.sigmas !== undefined) {
 		schedule = scheduleOf(args.sigmas);
 	}
+	// Steps come from the call, else from the schedule the call sent, else from what the named
+	// LoRAs were measured at, and only then from the package default.
+	const steps = args.steps ?? schedule?.steps ?? stepsOf(args.lora ?? [], cfg.loras) ?? DEFAULT_STEPS;
+	const seed = args.seed ?? SEED_SERVER_PICKS;
+	// The same three sources for CFG: the call, the recipe of a named LoRA, the config.
+	const cfgScale = args.cfgScale ?? cfgOf(args.lora ?? [], cfg.loras) ?? cfg.cfgScale;
 
 	// The OpenAI body has no field for steps, seed or a negative prompt — and sd-server
 	// leaves its progress status empty while a generation arrives on that route (measured
@@ -847,6 +900,7 @@ async function generate(
 	const format = args.format ?? cfg.format;
 	const knobs =
 		args.steps !== undefined ||
+		args.cfgScale !== undefined ||
 		args.sigmas !== undefined ||
 		args.seed !== undefined ||
 		Boolean(args.negativePrompt) ||
@@ -904,7 +958,7 @@ async function generate(
 		body.steps = steps;
 		body.seed = seed;
 		body.negative_prompt = args.negativePrompt ?? "";
-		body.cfg_scale = cfg.cfgScale;
+		body.cfg_scale = cfgScale;
 		body.batch_size = n;
 		if (args.lora?.length) {
 			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: weightOf(l, cfg.loras[l.path]) }));
@@ -1057,7 +1111,7 @@ async function generate(
 		if (route === "images/generations") {
 			echo = `size ${size.width}x${size.height}, ${produced}`;
 		} else {
-			echo = `${stepWord}, cfg ${cfg.cfgScale}, seed ${seed}`;
+			echo = `${stepWord}, cfg ${cfgScale}, seed ${seed}`;
 			if (args.lora?.length) {
 				echo += `, lora ${loraTag(args.lora, cfg.loras)}`;
 			}
@@ -1184,7 +1238,13 @@ export default function (pi: ExtensionAPI) {
 			steps: Type.Optional(
 				Type.Number({
 					description:
-						"Sampling steps. The tool sends 20, and 4 steps came back as noise on qwen-image. An entry started with a fixed --sigmas schedule samples that schedule instead of this number — use `sigmas` there.",
+						"Sampling steps. The tool sends 20, and 4 steps came back as noise on qwen-image. An entry started with a fixed --sigmas schedule samples that schedule instead of this number — use `sigmas` there. With neither set, a named LoRA's measured steps apply.",
+				}),
+			),
+			cfgScale: Type.Optional(
+				Type.Number({
+					description:
+						"True CFG. Defaults to the lowest value the named LoRAs were measured at, then to the config value. Measured on the turbo: 1 is flat but twice as fast, 4 is the working point, 6 oversaturates and breaks anatomy on some pairs.",
 				}),
 			),
 			sigmas: Type.Optional(
@@ -1387,7 +1447,13 @@ export default function (pi: ExtensionAPI) {
 				const shown = [`image: ${files.length} loras on ${cfg.model}`];
 				for (const f of files) {
 					const note = cfg.loras[f.path];
-					shown.push(`  ${f.path} — ${note?.useWhen ?? "undocumented"}`);
+					// The hint rides along so the model can reuse wording that was actually shot, rather
+					// than inventing a prompt for a file whose recipe already has one.
+					let hint = "";
+					if (note?.promptHint !== undefined) {
+						hint = ` · "${note.promptHint}"`;
+					}
+					shown.push(`  ${f.path} — ${note?.useWhen ?? "undocumented"}${hint}`);
 				}
 				for (const path of Object.keys(cfg.loras)) {
 					if (!files.some((f) => f.path === path)) {

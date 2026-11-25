@@ -3,13 +3,16 @@
   "model": "qwen-image-turbo",
   "size": "1024x1024",
   "format": "png",
-  "cfgScale": 6.0,
+  "cfgScale": 4.0,
   "loras": {
     "f23gg/NSFW-Qwen-Lora.safetensors": {
       "useWhen": "the prompt is NSFW and needs a pose or anatomy the base model fumbles — positions, cum, anatomy",
       "notFor": "sfw scenes and plain portraits, where it changes nothing",
       "conflictsWith": ["Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors"],
       "weight": [0.8, 1],
+      "steps": 25,
+      "cfgScale": 4,
+      "promptHint": "a nude woman sitting on the edge of a bed, looking at the camera, soft window light, realistic photograph",
       "source": "https://civitai.com/api/v1/models/2958918"
     },
     "Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors": {
@@ -22,8 +25,11 @@
     },
     "perpetual3x/Genitalia-Anatomy-2.1-v1.safetensors": {
       "useWhen": "genital anatomy for adult female or male subjects, in generation and in image editing",
-      "notFor": "clothed or sfw frames — it adds anatomy the prompt did not ask for",
-      "weight": 1,
+      "notFor": "clothed or sfw frames — it adds anatomy the prompt did not ask for; and not at full weight beside f23gg, which folded the legs into a mermaid shape (measured 2026-11-25), 0.7 is what held",
+      "weight": 0.7,
+      "steps": 25,
+      "cfgScale": 4,
+      "promptHint": "a nude woman sitting cross-legged on a rug, front view, detailed anatomy, zl_private_v1",
       "trigger": "zl_private_v1",
       "source": "https://huggingface.co/perpetual3x/Qwen-Image-Genitalia-Anatomy-Fix-NSFW-LoRA-v1"
     },
@@ -37,22 +43,36 @@
       "useWhen": "the frame is full body and the pelvis gets cropped away or smeared; the card says the LoRA has no trigger word",
       "notFor": "portraits and half-frames, where there is no pelvis to fix",
       "weight": 0.8,
+      "steps": 25,
+      "cfgScale": 4,
+      "promptHint": "full body photograph of a nude woman standing in a sunlit studio, whole figure from head to feet visible",
       "source": "https://civitai.com/api/v1/models/2983070"
     },
     "Danrisi/lenovo_qwen21.safetensors": {
       "useWhen": "any subject that should look photographed — the author's photoreal style; the card asks for cfg 3-4, down to 1 once the image turns to slop, with a beta scheduler (res_2s best quality, res_2m balanced, multistep fastest)",
-      "notFor": "anime and stylised frames; and not at the cfg 6 this config carries, which is past what the card endorses",
+      "notFor": "anime and stylised frames",
+      "weight": 0.9,
+      "steps": 25,
+      "cfgScale": 4,
+      "promptHint": "portrait of a young woman with freckles, natural window light, shallow depth of field, candid 35mm photograph",
       "source": "https://civitai.com/api/v1/models/1662740"
     },
     "chatrlabs/chatrlabs-omni-lora-v0.1-bf16.safetensors": {
       "useWhen": "uncensoring the base with one adapter that covers text-to-image and editing at once; the card's own settings are strength 1.0, 35 steps, true cfg 5.0, negative prompt a single space",
-      "notFor": "a pose the narrower files were trained for — f23gg and Oliver577 for poses, perpetual3x and tawsLoRa for anatomy; and untested here, because the card evaluated 35 steps while this entry samples 8",
+      "notFor": "a pose the narrower files were trained for — f23gg and Oliver577 for poses, perpetual3x and tawsLoRa for anatomy",
       "weight": 1,
+      "steps": 25,
+      "cfgScale": 4,
+      "promptHint": "a nude woman sitting on the edge of a bed, looking at the camera, soft window light, realistic photograph",
       "source": "https://huggingface.co/chatrlabs/Qwen-Image-2.1-Uncensored-Omni-LoRA-v0.1"
     },
     "Danrisi/nicegirls_v2_qwen21.safetensors": {
       "useWhen": "the subject is a woman and the frame wants the author's second dataset; the card names lenovo_qwen21 as a pairing that works",
       "notFor": "male-only and non-person frames",
+      "weight": 1,
+      "steps": 25,
+      "cfgScale": 4,
+      "promptHint": "portrait of a young woman with freckles, natural window light, shallow depth of field, candid 35mm photograph",
       "source": "https://civitai.com/api/v1/models/1862761"
     },
     "AusBoss/qwen-image-2.1-consistency.safetensors": {
@@ -62,11 +82,16 @@
     },
     "AusBoss/qwen-image-2.1-restore.safetensors": {
       "useWhen": "2.1's own upscale is too harsh — the card says it softens the grit, keeps detail and adds less makeup than the base does, step 1500, with a step-1250 build carrying more skin texture on Hugging Face",
-      "notFor": "text-to-image, and frames that already need sharpening",
+      "notFor": "text-to-image, and frames that already need sharpening — measured 2026-11-25, a clean render repainted at strength 0.4 came out sharper without this file than with it",
+      "weight": 1,
       "source": "https://civitai.com/api/v1/models/2989697"
     },
     "AHEKOT/VNCCS_QI2_PoseStudioV3.safetensors": {
       "useWhen": "posing a character — v3's card claims improved transparent images and steadier multi-character generation",
+      "weight": 1,
+      "steps": 25,
+      "cfgScale": 4,
+      "promptHint": "a woman doing a yoga pose in a park, full body, side view, morning light",
       "source": "https://civitai.com/api/v1/models/2957080"
     }
   },

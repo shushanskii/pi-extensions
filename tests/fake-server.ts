@@ -128,6 +128,7 @@ function loraCatalog(): Record<string, unknown>[] {
 		entry("NSFW-Qwen-Lora", "f23gg/NSFW-Qwen-Lora.safetensors"),
 		entry("NSFW-Qwen-by-TheseAlpacas-V2", "Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors"),
 		entry("style", "author/style.safetensors"),
+		entry("Recipe-Lora", "measured/Recipe-Lora.safetensors"),
 	];
 }
 
