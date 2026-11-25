@@ -9,6 +9,23 @@
       "description": "general NSFW",
       "trigger": "nsfw_qwen_lora",
       "weight": 0.8
+    },
+    "Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors": {
+      "description": "general NSFW — blowjobs, cowgirl, doggy, cum, anal; the card asks for 25+ steps, cfg 3-5, er_sde and the beta scheduler",
+      "trigger": "nsfw",
+      "weight": 0.8
+    },
+    "perpetual3x/Genitalia-Anatomy-2.1-v1.safetensors": {
+      "description": "genital anatomy for adult female and male subjects, text-to-image and image editing; five anatomy groups trained as one adapter",
+      "trigger": "zl_private_v1"
+    },
+    "tawsLoRa/qwen2_1-femaledVaginus-nsfw-v1_3-fine_L22-31.safetensors": {
+      "description": "female genitalia, breasts and male anatomy in any skin colour; v1.3b is the sharper build, layers 22-31 muted",
+      "weight": 0.8
+    },
+    "PromptPotamus/qwen21_fullbody_pass2_fp16.safetensors": {
+      "description": "full-body framing whose pelvis reads as anatomy instead of being cropped away or smeared; the card says it has no trigger word",
+      "weight": 0.8
     }
   },
   "dir": "~/Pictures/pi",
