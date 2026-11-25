@@ -84,10 +84,41 @@
  * sigma schedule passed as --sigmas). Measured 2026-11-12 on the SDAPI route at 512x672/20
  * CFG 6: 25.6s on the turbo against the 57s the plain model takes, and 1024²/20 in 101.4s
  * against 337s — a third of the wait for a picture that reads the same, so the fast one is
- * the default. The tool always sends `steps` and `cfg_scale`, so the entry's own 8 steps
- * and CFG 1 reach only callers that omit them; at CFG 6 the turbo came out slightly crisper
- * in texture and at CFG 1 slightly softer, neither broken, so this file does not second-
- * guess the CFG of a model it did not configure.
+ * the default. At CFG 6 the turbo came out slightly crisper in texture and at CFG 1 slightly
+ * softer, neither broken, so this file does not second-guess the CFG of a model it did not
+ * configure.
+ *
+ * Why `steps` alone does nothing on that entry, and `sigmas` exists. The entry's fixed
+ * `--sigmas` override the request's `steps`: measured 2026-11-25, a call for 25 steps came
+ * back with the entry's own 9-value schedule and a picture byte-identical to the 8-step one
+ * (IDAT md5 equal, header still `Steps: 8`), while `cfg_scale` does pass through as `txt_cfg`.
+ * `sigmas` sends the schedule itself, so a caller can ask for steps the entry does not carry.
+ *
+ * Why `sigmas` is a list and not a number. sd-server takes the schedule as
+ * `sample_params.custom_sigmas`, and the compatibility APIs reach it only through a
+ * `<sd_cpp_extra_args>{…}</sd_cpp_extra_args>` block embedded in `prompt`: the server parses
+ * the block, applies it, and strips it from the prompt before generating
+ * (`examples/server/api.md`). A nonempty list replaces the loaded schedule, its length minus
+ * one is the step count, and the final `0` is required — so the shape is checked here before
+ * the box is woken, and the echo states the schedule's count rather than the `steps` the
+ * server ignored. Measured 2026-11-25: 26 sigmas at 512x672 on the turbo answered in 77s
+ * with header `Steps: 25`, against 27s for the entry's own 8 steps.
+ *
+ * Why the tool asks the server which LoRAs exist. `lora` is a path, and a wrong one costs a
+ * whole generation before the server answers `400 invalid_model_config`. The catalog is one
+ * GET — `/sdapi/v1/loras?model=<model>` — and the `model` part is not optional: without it
+ * llama-swap answers `404 no model id could be identified` even with the model loaded
+ * (measured 2026-11-25, and `?model=` accepts the name or an alias). The answer carries
+ * `name` and `path` only, so what an adapter is *for* comes from `loras` in the config: a map
+ * keyed by the same path, holding when to use it, when not to, which files it conflicts with,
+ * the weight (or the range the author asks for), the trigger word and the card all of it was
+ * copied from. Those keys are also everything `lora[].path` offers: a file nobody described is
+ * a file the model cannot name, which is what turns the manifest from documentation into a
+ * contract. `/image loras` prints the two side by side and names
+ * both ways they disagree — a manifest entry the server no longer has, a file nobody
+ * documented. The probe is a courtesy, not a gate: a catalog that answers nothing is swallowed
+ * and the server's own 400 stays the check, because a lookup is not the picture and must not
+ * be the thing that fails it.
  *
  * Config: ~/.pi/agent/image.json — the same directory and plaintext convention as
  * tts.json. `/image test` proves both routes, one after the other on the one GPU, for
@@ -139,6 +170,8 @@ interface Config {
 	format: string;
 	/** Sent on the SDAPI route; the OpenAI route uses the server's --cfg-scale. */
 	cfgScale: number;
+	/** What each LoRA in the server's catalog is for, keyed by the path `lora` takes. */
+	loras: Record<string, LoraInfo>;
 	/** Where the files go when the caller names no path. */
 	dir: string;
 	/**
@@ -160,6 +193,7 @@ const DEFAULTS: Config = {
 	size: "1024x1024",
 	format: "png",
 	cfgScale: 6.0,
+	loras: {},
 	dir: "~/Pictures/pi",
 	timeoutMs: 900_000,
 	open: false,
@@ -194,6 +228,10 @@ const TICK_MS = 1000;
 const DEFAULT_STEPS = 20;
 // -1 is SDAPI's "pick one", so the default seed is a value rather than an absence.
 const SEED_SERVER_PICKS = -1;
+// The server's own bounds for a sigma list. A schedule outside them is refused here rather
+// than at the gateway: a refused request costs nothing, a woken box costs a model load.
+const MIN_SIGMAS = 2;
+const MAX_SIGMAS = 1001;
 // The 2xx band. fetch answered `res.ok` for free; the raw transport compares the number,
 // so both edges get a name — 300 (Multiple Choices) is the first status that is not a
 // success and the last one a generation must not be.
@@ -367,6 +405,167 @@ function parseSize(size: string): { width: number; height: number } | { error: s
 	return { width, height };
 }
 
+interface Schedule {
+	/** The `<sd_cpp_extra_args>` block to append to `prompt`. */
+	block: string;
+	/** How many sigmas were given. */
+	values: number;
+	/** What the server samples: the schedule's length minus one. */
+	steps: number;
+}
+
+/**
+ * A sigma schedule, shaped the way the server reads it. The bounds and the trailing zero are
+ * the server's rules (`examples/server/api.md`), checked here so a schedule it would refuse
+ * costs no GPU time.
+ */
+function scheduleOf(values: number[]): Schedule {
+	if (values.length < MIN_SIGMAS || values.length > MAX_SIGMAS) {
+		throw new Error(`sigmas needs ${MIN_SIGMAS}..${MAX_SIGMAS} values, got ${values.length}`);
+	}
+	if (values.some((v) => !Number.isFinite(v) || v < 0)) {
+		throw new Error(`sigmas must be finite and non-negative, got ${values.join(", ")}`);
+	}
+	if (values.at(-1) !== 0) {
+		throw new Error(`sigmas must end in 0, got ${String(values.at(-1))}`);
+	}
+	// The keys are the server's vocabulary, so they are assigned to maps rather than written
+	// inline, the way the request body builds its own wire names.
+	const params: Record<string, unknown> = {};
+	params.custom_sigmas = values;
+	const extra: Record<string, unknown> = {};
+	extra.sample_params = params;
+	const json = JSON.stringify(extra);
+	return { block: `<sd_cpp_extra_args>${json}</sd_cpp_extra_args>`, values: values.length, steps: values.length - 1 };
+}
+
+/** One LoRA as the model names it in a call. */
+interface LoraRef {
+	/** A file the config describes; the schema narrows the field to exactly those paths. */
+	path: string;
+	/** How strongly to apply it; the manifest's weight fills this when the call sets none. */
+	weight?: number;
+}
+
+/**
+ * One entry of the config's `loras` map: the rule for when to reach for the file, not a
+ * caption. `lora[].path` is built into an enum out of these keys, so a file nobody described
+ * is a file the model is not offered — describing it is what makes it usable, and a wrong
+ * field is a choice the model makes wrong too. Hence `source`: every entry traces to a card.
+ */
+interface LoraInfo {
+	/** The kind of prompt this file fixes, in the words the model reads. */
+	useWhen?: string;
+	/** Where it adds nothing, or actively hurts. */
+	notFor?: string;
+	/** Files whose concepts overlap: naming both is a fight, not a stronger picture. */
+	conflictsWith?: string[];
+	/**
+	 * The weight to send when a call names this file and sets none. Either one number, or the
+	 * range the author asks for — of a range, the middle is what gets sent, because the tool
+	 * has to send one number and the middle is the only one the range endorses entirely.
+	 */
+	weight?: number | [number, number];
+	/** The word it answers to, if it answers to one. Authors lie about this; `source` says who. */
+	trigger?: string;
+	/** The card the fields above were copied from. */
+	source?: string;
+}
+
+/** One entry of the server's LoRA catalog. */
+interface LoraFile {
+	/** The file stem the server shows. */
+	name: string;
+	/** The path `lora` takes: relative to the server's `--lora-model-dir`. */
+	path: string;
+}
+
+// Two decimals are enough to distinguish the weights anyone actually types, and rounding
+// keeps a range's middle from arriving as 0.7000000000000001.
+const WEIGHT_PRECISION = 100;
+
+/** The number a call gets when it names a file and sets no weight: a range's middle, or 1. */
+function weightOf(ref: LoraRef, note?: LoraInfo): number {
+	if (ref.weight !== undefined) {
+		return ref.weight;
+	}
+	const configured = note?.weight;
+	if (configured === undefined) {
+		return 1;
+	}
+	if (Array.isArray(configured)) {
+		return Math.round(((configured[0] + configured[1]) / 2) * WEIGHT_PRECISION) / WEIGHT_PRECISION;
+	}
+	return configured;
+}
+
+/** Whether the manifest says two files fight — a pair may be named from either side. */
+function conflictsBetween(notes: Record<string, LoraInfo>, a: string, b: string): boolean {
+	return notes[a]?.conflictsWith?.includes(b) === true || notes[b]?.conflictsWith?.includes(a) === true;
+}
+
+/** `NSFW-Qwen-Lora.safetensors@0.9 general NSFW …` — what the echo and the call header show. */
+function loraTag(loras: LoraRef[], notes: Record<string, LoraInfo>): string {
+	return loras
+		.map((l) => {
+			const note = notes[l.path];
+			const tag = `${basename(l.path)}@${weightOf(l, note)}`;
+			if (note?.useWhen === undefined) {
+				return tag;
+			}
+			return `${tag} ${note.useWhen}`;
+		})
+		.join(", ");
+}
+
+/**
+ * The catalog endpoint. llama-swap needs the model named: a bare `/sdapi/v1/loras` answers
+ * `404 no model id could be identified`, while `?model=` routes to that entry.
+ */
+function lorasUrl(cfg: Config): string {
+	return `${originOf(cfg)}/sdapi/v1/loras?model=${encodeURIComponent(cfg.model)}`;
+}
+
+/** Ask the server which LoRA files the model can be given. */
+async function listLoras(cfg: Config, signal: AbortSignal): Promise<LoraFile[]> {
+	const res = await getJson(lorasUrl(cfg), signal);
+	if (res.status !== HTTP_OK) {
+		throw new Error(`${cfg.model}: HTTP ${res.status} from /sdapi/v1/loras — ${res.text.slice(0, PREVIEW_CHARS)}`);
+	}
+	const parsed: unknown = JSON.parse(res.text);
+	if (!Array.isArray(parsed)) {
+		throw new Error(`${cfg.model}: /sdapi/v1/loras answered something that is not a list`);
+	}
+	const files: LoraFile[] = [];
+	for (const item of parsed) {
+		const path = stringField(item, "path");
+		const name = stringField(item, "name");
+		if (path === undefined || name === undefined) {
+			throw new Error(`${cfg.model}: a lora entry without name or path: ${JSON.stringify(item)}`);
+		}
+		files.push({ name, path });
+	}
+	return files;
+}
+
+// A catalog is cheap to ask and changes only when someone puts a file on the box, so one answer
+// is reused for a minute: a session that draws five pictures asks once. `/image loras` refetches
+// on demand, and a generation gives the probe this short leash because it is not the picture.
+const CATALOG_TTL_MS = 60_000;
+const CATALOG_GIVE_MS = 3000;
+let catalog: { url: string; at: number; files: LoraFile[] } | undefined;
+
+/** The catalog, refetched when it is older than the TTL, the model changed, or `force`. */
+async function catalogFor(cfg: Config, signal: AbortSignal, force = false): Promise<LoraFile[]> {
+	const url = lorasUrl(cfg);
+	if (!force && catalog?.url === url && Date.now() - catalog.at < CATALOG_TTL_MS) {
+		return catalog.files;
+	}
+	const files = await listLoras(cfg, signal);
+	catalog = { url, at: Date.now(), files };
+	return files;
+}
+
 function slug(text: string): string {
 	return (
 		text.toLowerCase().replace(NOT_SLUG, "-").replace(EDGE_DASHES, "").slice(0, SLUG_MAX).replace(TRAILING_DASH, "") ||
@@ -409,9 +608,10 @@ interface Args {
 	format?: string;
 	path?: string;
 	steps?: number;
+	sigmas?: number[];
 	seed?: number;
 	negativePrompt?: string;
-	lora?: { path: string; weight?: number }[];
+	lora?: LoraRef[];
 	image?: string[];
 	initImage?: string;
 	mask?: string;
@@ -618,6 +818,12 @@ async function generate(
 	const n = Math.max(MIN_IMAGES, Math.min(MAX_IMAGES, Math.floor(args.n ?? 1)));
 	const steps = args.steps ?? DEFAULT_STEPS;
 	const seed = args.seed ?? SEED_SERVER_PICKS;
+	// An entry started with --sigmas samples its own schedule whatever `steps` says, so a
+	// caller that means a different number of steps has to send the schedule itself.
+	let schedule: Schedule | undefined;
+	if (args.sigmas !== undefined) {
+		schedule = scheduleOf(args.sigmas);
+	}
 
 	// The OpenAI body has no field for steps, seed or a negative prompt — and sd-server
 	// leaves its progress status empty while a generation arrives on that route (measured
@@ -641,6 +847,7 @@ async function generate(
 	const format = args.format ?? cfg.format;
 	const knobs =
 		args.steps !== undefined ||
+		args.sigmas !== undefined ||
 		args.seed !== undefined ||
 		Boolean(args.negativePrompt) ||
 		Boolean(args.lora?.length) ||
@@ -648,10 +855,42 @@ async function generate(
 		repaint;
 	const api = cfg.baseUrl.replace(TRAILING_SLASH, "");
 	const origin = originOf(cfg);
+	// A path the server does not know costs a whole generation to discover, so the call is
+	// checked before the box wakes: first the pairs the manifest calls conflicting (no network
+	// needed), then the catalog itself. A failed lookup is swallowed, because a lookup is not
+	// the picture and must not be the thing that fails it.
+	if (args.lora?.length) {
+		// Two files trained on the same concept do not add up, they argue — and the model cannot
+		// see that from two paths, so the manifest says it and the call is refused here. A refused
+		// call costs nothing; a sampled one costs a generation and a picture nobody asked for.
+		for (const [index, l] of args.lora.entries()) {
+			for (const other of args.lora.slice(index + 1)) {
+				if (conflictsBetween(cfg.loras, l.path, other.path)) {
+					throw new Error(`lora: ${l.path} and ${other.path} conflict — apply one of them`);
+				}
+			}
+		}
+		const known = await catalogFor(cfg, AbortSignal.timeout(CATALOG_GIVE_MS)).catch(() => undefined);
+		if (known !== undefined) {
+			for (const l of args.lora) {
+				if (!known.some((f) => f.path === l.path)) {
+					throw new Error(
+						`lora: ${l.path} is not in ${cfg.model}'s catalog (${known.map((f) => f.path).join(", ") || "empty"})`,
+					);
+				}
+			}
+		}
+	}
+
 	// `negative_prompt`, `cfg_scale`, `batch_size` and `output_format` are the server's
 	// vocabulary rather than this file's, so both shapes are built as maps: the keys are wire
 	// data, and the naming rule is about the identifiers this file owns.
-	const body: Record<string, unknown> = { model: cfg.model, prompt: args.prompt };
+	const body: Record<string, unknown> = { model: cfg.model };
+	if (schedule === undefined) {
+		body.prompt = args.prompt;
+	} else {
+		body.prompt = `${args.prompt} ${schedule.block}`;
+	}
 	let url: string;
 	let route: string;
 	if (format === "png" || knobs) {
@@ -668,7 +907,7 @@ async function generate(
 		body.cfg_scale = cfg.cfgScale;
 		body.batch_size = n;
 		if (args.lora?.length) {
-			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: l.weight ?? 1 }));
+			body.lora = args.lora.map((l) => ({ path: l.path, multiplier: weightOf(l, cfg.loras[l.path]) }));
 		}
 		if (args.initImage !== undefined) {
 			body.init_images = [readImage("initImage", args.initImage)];
@@ -808,14 +1047,19 @@ async function generate(
 		const mime = mimeOf(produced);
 		const ext = extensionOf(mime);
 		// The echo follows the route that answered, not the knobs: a plain call rides SDAPI
-		// too now, and its line has to say what SDAPI was told.
+		// too now, and its line has to say what SDAPI was told. With a schedule in the request,
+		// the schedule is the count the server samples and `steps` is the number it ignored.
+		let stepWord = `steps ${steps}`;
+		if (schedule !== undefined) {
+			stepWord = `steps ${schedule.steps} from ${schedule.values} sigmas`;
+		}
 		let echo: string;
 		if (route === "images/generations") {
 			echo = `size ${size.width}x${size.height}, ${produced}`;
 		} else {
-			echo = `steps ${steps}, cfg ${cfg.cfgScale}, seed ${seed}`;
+			echo = `${stepWord}, cfg ${cfg.cfgScale}, seed ${seed}`;
 			if (args.lora?.length) {
-				echo += `, lora ${args.lora.map((l) => `${basename(l.path)}@${l.weight ?? 1}`).join(", ")}`;
+				echo += `, lora ${loraTag(args.lora, cfg.loras)}`;
 			}
 			if (route === "sdapi/img2img") {
 				let how = "repainting";
@@ -873,8 +1117,23 @@ function openIn(path: string): void {
 	spawn(cmd, args, { detached: true, stdio: "ignore" }).unref();
 }
 
+/** What the schema says on `lora[].path`; one string for both shapes of the field below. */
+const LORA_PATH_DOC =
+	'The LoRA file inside the server\'s loras directory, subfolders included — "author/style.safetensors". Not a local path.';
+
 export default function (pi: ExtensionAPI) {
 	const cfg = loadConfig();
+
+	// The manifest is what the model can choose from. With entries, `path` becomes an enum of the
+	// described files, so the list and its one-line rules sit in front of the model before it
+	// picks — that is the whole reason the manifest exists. Without entries the field stays a
+	// plain string and the catalog check is the only guard, so a config with no manifest keeps
+	// working the way the published version did.
+	const loraPaths = Object.keys(cfg.loras);
+	let loraPathSchema = Type.String({ description: LORA_PATH_DOC });
+	if (loraPaths.length > 0) {
+		loraPathSchema = Type.String({ description: LORA_PATH_DOC, enum: loraPaths });
+	}
 
 	const tool = defineTool({
 		name: "generate_image",
@@ -925,7 +1184,13 @@ export default function (pi: ExtensionAPI) {
 			steps: Type.Optional(
 				Type.Number({
 					description:
-						"Sampling steps. The tool sends 20; the turbo entry is built for 8, and 4 steps came back as noise on qwen-image.",
+						"Sampling steps. The tool sends 20, and 4 steps came back as noise on qwen-image. An entry started with a fixed --sigmas schedule samples that schedule instead of this number — use `sigmas` there.",
+				}),
+			),
+			sigmas: Type.Optional(
+				Type.Array(Type.Number(), {
+					description:
+						"The sigma schedule to sample, in place of the model's own — 2..1001 values ending in 0, and their count minus one is what gets sampled. This is how to sample more steps than an entry carries: 25 steps at flow_shift 3 is 3t/(1+2t) for t = 1, 24/25 … 0.",
 				}),
 			),
 			seed: Type.Optional(Type.Number({ description: "Fix the seed to repeat or vary one composition." })),
@@ -933,12 +1198,12 @@ export default function (pi: ExtensionAPI) {
 			lora: Type.Optional(
 				Type.Array(
 					Type.Object({
-						path: Type.String({
-							description:
-								'The LoRA file inside the server\'s loras directory, subfolders included — "author/style.safetensors". Not a local path.',
-						}),
+						path: loraPathSchema,
 						weight: Type.Optional(
-							Type.Number({ description: "How strongly to apply it; 0.6..1.0 is the usual range. Default 1." }),
+							Type.Number({
+								description:
+									"How strongly to apply it; 0.6..1.0 is the usual range. Default: the manifest's weight for that file, or 1.",
+							}),
 						),
 					}),
 					{ description: "LoRA files from the server's catalog to apply to this generation." },
@@ -1034,11 +1299,19 @@ export default function (pi: ExtensionAPI) {
 			if (a.steps !== undefined) {
 				bits.push(`${a.steps} steps`);
 			}
+			// The schedule belongs next to the number it replaces: `steps` is what the server
+			// ignores when sigmas are there, and the header has to show what was sent.
+			if (a.sigmas?.length) {
+				bits.push(`${a.sigmas.length} sigmas`);
+			}
 			if (a.n !== undefined && a.n > 1) {
 				bits.push(`n ${a.n}`);
 			}
 			if (a.seed !== undefined) {
 				bits.push(`seed ${a.seed}`);
+			}
+			if (a.lora?.length) {
+				bits.push(`lora ${loraTag(a.lora, cfg.loras)}`);
 			}
 			let line = theme.fg("toolTitle", theme.bold("generate_image")) + theme.fg("muted", ` · ${bits.join(" · ")}`);
 			if (a.prompt) {
@@ -1096,7 +1369,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("image", {
-		description: "qwen-image: test | config | <prompt>",
+		description: "qwen-image: test | config | loras | <prompt>",
 		handler: async (args, ctx) => {
 			const arg = (args ?? "").trim();
 			const { ui } = ctx as unknown as ExtensionContext;
@@ -1106,12 +1379,31 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
+			// The server's list and the config's notes side by side: the list is what can be
+			// drawn, the notes say what each one is for, and the two ways they disagree are the
+			// useful output — a file nobody documented, a note whose file is gone.
+			if (arg === "loras") {
+				const files = await catalogFor(cfg, AbortSignal.timeout(CATALOG_GIVE_MS), true);
+				const shown = [`image: ${files.length} loras on ${cfg.model}`];
+				for (const f of files) {
+					const note = cfg.loras[f.path];
+					shown.push(`  ${f.path} — ${note?.useWhen ?? "undocumented"}`);
+				}
+				for (const path of Object.keys(cfg.loras)) {
+					if (!files.some((f) => f.path === path)) {
+						shown.push(`  manifest only: ${path}`);
+					}
+				}
+				ui.notify(shown.join("\n"), "info");
+				return;
+			}
+
 			let prompt = arg;
 			if (arg === "test") {
 				prompt = "a small red fox sitting in snow, watercolor";
 			}
 			if (!prompt) {
-				ui.notify("usage: /image test | config | <prompt>", "info");
+				ui.notify("usage: /image test | config | loras | <prompt>", "info");
 				return;
 			}
 

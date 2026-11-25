@@ -113,6 +113,24 @@ function openAiImageAnswer(): Record<string, unknown> {
 	return answer;
 }
 
+/**
+ * The LoRA catalog as sd-server answers it. `display_path` is the server's vocabulary rather
+ * than this file's, so the entry is built as a map — the same way pi-image builds its bodies.
+ * The paths the pi-image tests name, so a request naming either one is known to the catalog.
+ */
+function loraCatalog(): Record<string, unknown>[] {
+	const entry = (name: string, path: string): Record<string, unknown> => {
+		const file: Record<string, unknown> = { name, path };
+		file.display_path = path;
+		return file;
+	};
+	return [
+		entry("NSFW-Qwen-Lora", "f23gg/NSFW-Qwen-Lora.safetensors"),
+		entry("NSFW-Qwen-by-TheseAlpacas-V2", "Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors"),
+		entry("style", "author/style.safetensors"),
+	];
+}
+
 /** One scripted model answer: text, a tool call pi will then execute, or several calls at once. */
 export interface ToolCall {
 	tool: string;
@@ -123,6 +141,8 @@ export type Turn = { text: string } | ToolCall | { tools: ToolCall[] };
 export interface LoggedRequest {
 	method: string;
 	path: string;
+	/** The query string as sent, without the leading `?`; empty when the request had none. */
+	query: string;
 	/** Parsed JSON when the body was JSON, its raw text when it was not. */
 	body: unknown;
 }
@@ -176,11 +196,12 @@ export function scriptedModels(url: string) {
 	};
 }
 
-/** The three image routes pi-image knows, answering with one PNG each by default. */
+/** The routes pi-image calls, each answered by default with what the real server keeps there. */
 export const IMAGE_ROUTES: Record<string, Route> = {
 	"/v1/images/generations": { status: HTTP_OK, body: openAiImageAnswer() },
 	"/sdapi/v1/txt2img": { status: HTTP_OK, body: { images: [PNG_1X1] } },
 	"/sdapi/v1/img2img": { status: HTTP_OK, body: { images: [PNG_1X1] } },
+	"/sdapi/v1/loras": { status: HTTP_OK, body: loraCatalog() },
 };
 
 export async function startFakeServer(): Promise<FakeServer> {
@@ -199,8 +220,9 @@ export async function startFakeServer(): Promise<FakeServer> {
 				/* keep the raw text: a test may want to see what was not JSON */
 			}
 		}
-		const path = (req.url ?? "/").split("?")[0] ?? "/";
-		log.push({ method: req.method ?? "", path, body });
+		const url = req.url ?? "/";
+		const [path = "/", query = ""] = url.split("?");
+		log.push({ method: req.method ?? "", path, query, body });
 
 		if (path === "/v1/chat/completions") {
 			const turn = turns.shift();
