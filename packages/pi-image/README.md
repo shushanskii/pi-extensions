@@ -2,12 +2,21 @@
 
 The lab's qwen-image as a tool the model can call: draw from a prompt, edit a picture by
 reference (`image`), or repaint inside a mask (`initImage`, `mask`, `strength`). A call can
-also name the sigma schedule to sample (`sigmas`) when the model's own is not the one wanted.
+also name the sigma schedule to sample (`sigmas`) when the model's own is not the one wanted,
+or the CFG (`cfgScale`) when the config's is not what the recipe asks for.
 LoRAs are named by the path the server lists; the `loras` key is the contract — its keys are
 exactly what `lora[].path` offers, and each entry says when to use the file, when not to,
 which files it conflicts with, the weight to send (one number, or the author's range, whose
-middle gets sent) and the card the claim came from. `/image loras` prints that manifest
-beside the server's own catalog and names both ways they disagree.
+middle gets sent) and the card the claim came from. Once a file has been shot here, the entry
+carries the rest of the recipe: the `steps` and `cfgScale` that shot worked at, and the
+`promptHint` — the wording it was shot with, which `/image loras` prints so the model can
+reuse a sentence that worked instead of inventing one.
+
+A call that names files and sets neither `steps` nor `cfgScale` inherits them: the highest
+`steps` among the named files, the lowest `cfgScale`. Both directions are deliberate. A file
+that only resolves at 35 steps is not served by sharing a call with an 8-step one, and
+over-driving the CFG is the failure measured on this box, where a pair that reads well at 4
+came out with broken anatomy at 6.
 
 ```bash
 pi install npm:@shushanskii/pi-image

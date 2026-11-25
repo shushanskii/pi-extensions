@@ -28,6 +28,10 @@ const FOX_FILE = /-a-red-fox\.png$/u;
 /** The weight range the manifest gives `f23gg`; a call that names the file gets its middle. */
 // biome-ignore lint/style/noMagicNumbers: the two ends of a range are the value, not a threshold worth naming
 const F23GG_WEIGHT: [number, number] = [0.8, 1];
+/** What the fixture's `measured/Recipe-Lora.safetensors` declares, and what a call naming it gets. */
+const RECIPE = { steps: 25, cfgScale: 4 };
+/** The same two fields on `author/style.safetensors`, so a stack has two answers to choose between. */
+const STYLE_RECIPE = { steps: 30, cfgScale: 5 };
 
 /** What pi-image puts into `details`; the package owns the shape, and this file is what pins it. */
 interface ImageDetails {
@@ -72,7 +76,19 @@ beforeAll(async () => {
 				weight: F23GG_WEIGHT,
 			},
 			"Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors": { useWhen: "the same training, V2", weight: 0.8 },
-			"author/style.safetensors": { useWhen: "paper cut-out" },
+			// A file whose entry carries a whole recipe: steps and CFG the call inherits from it.
+			"author/style.safetensors": {
+				useWhen: "paper cut-out",
+				steps: STYLE_RECIPE.steps,
+				cfgScale: STYLE_RECIPE.cfgScale,
+			},
+			"measured/Recipe-Lora.safetensors": {
+				useWhen: "a recipe measured on the box",
+				weight: 0.9,
+				steps: RECIPE.steps,
+				cfgScale: RECIPE.cfgScale,
+				promptHint: "a red fox sitting on a fence at golden hour",
+			},
 			"gone/Old-Lora.safetensors": { useWhen: "a file removed upstream" },
 		},
 	});
@@ -158,10 +174,14 @@ describe("commands, no model", () => {
 		await harness.pi.client.prompt("/image loras");
 		const notice = await harness.pi.waitForUi((r) => r.method === "notify");
 
-		expect(notice.message).toContain("image: 3 loras on qwen-image-turbo");
+		expect(notice.message).toContain("image: 4 loras on qwen-image-turbo");
 		expect(notice.message).toContain("  f23gg/NSFW-Qwen-Lora.safetensors — general NSFW");
 		expect(notice.message).toContain("  Oliver577/NSFW-Qwen-by-TheseAlpacas-V2.safetensors — the same training, V2");
 		expect(notice.message).toContain("  author/style.safetensors — paper cut-out");
+		// A recipe's wording rides along, so the model can reuse a prompt that was actually shot.
+		expect(notice.message).toContain(
+			'  measured/Recipe-Lora.safetensors — a recipe measured on the box · "a red fox sitting on a fence at golden hour"',
+		);
 		// A note whose file the server no longer has is the other half of the answer.
 		expect(notice.message).toContain("  manifest only: gone/Old-Lora.safetensors");
 		// The model has to be named: a bare /sdapi/v1/loras answers 404 on llama-swap.
@@ -294,6 +314,41 @@ describe("tool, text-only model", () => {
 		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject({
 			lora: [{ path: "author/style.safetensors", multiplier: 1 }],
 		});
+	});
+
+	test("a named lora's recipe fills the steps and CFG the call does not set", async () => {
+		drawAndStop({ size: "256x256", lora: [{ path: "measured/Recipe-Lora.safetensors" }] });
+		await toolResult(harness.pi, "the fox, by the recipe");
+
+		const sent: Record<string, unknown> = { steps: RECIPE.steps };
+		sent.cfg_scale = RECIPE.cfgScale;
+		sent.lora = [{ path: "measured/Recipe-Lora.safetensors", multiplier: 0.9 }];
+		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject(sent);
+	});
+
+	test("a stack takes the lowest CFG and the highest steps its files ask for", async () => {
+		drawAndStop({
+			size: "256x256",
+			lora: [{ path: "measured/Recipe-Lora.safetensors" }, { path: "author/style.safetensors" }],
+		});
+		await toolResult(harness.pi, "two loras on one fox");
+
+		const sent: Record<string, unknown> = { steps: STYLE_RECIPE.steps };
+		sent.cfg_scale = RECIPE.cfgScale;
+		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject(sent);
+	});
+
+	test("the call's own cfgScale beats the recipe and the config", async () => {
+		drawAndStop({
+			size: "256x256",
+			cfgScale: STYLE_RECIPE.cfgScale,
+			lora: [{ path: "measured/Recipe-Lora.safetensors" }],
+		});
+		await toolResult(harness.pi, "the fox at the call's own CFG");
+
+		const sent: Record<string, unknown> = { steps: RECIPE.steps };
+		sent.cfg_scale = STYLE_RECIPE.cfgScale;
+		expect(server.log.find((r) => r.path === "/sdapi/v1/txt2img")?.body).toMatchObject(sent);
 	});
 
 	test("a lora the catalog does not have is refused before the picture is asked for", async () => {
